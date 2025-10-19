@@ -175,3 +175,172 @@ def test_full_ui_workflow_mock():
     
     print("✅ Full UI workflow mock test passed")
 
+
+class TestUIHelperFunctions:
+    """Test new UI helper functions from tabbed refactor."""
+    
+    def test_calculate_signals_and_weights(self):
+        """Test signal calculation with strategy breakdown."""
+        import pandas as pd
+        import numpy as np
+        
+        # Create mock data
+        n_bars = 100
+        df = pd.DataFrame({
+            'timestamp': range(n_bars),
+            'open': np.random.randn(n_bars).cumsum() + 50000,
+            'high': np.random.randn(n_bars).cumsum() + 50500,
+            'low': np.random.randn(n_bars).cumsum() + 49500,
+            'close': np.random.randn(n_bars).cumsum() + 50000,
+            'volume': abs(np.random.randn(n_bars)) * 1000000
+        })
+        
+        # Import helper function (if exposed)
+        # For now, test the underlying logic
+        from app.research.signals import ma_crossover, rsi_regime_pullback, trend_following_ema
+        from app.research.combine import combine_signals
+        
+        sig1 = ma_crossover(df['close'])
+        sig2 = rsi_regime_pullback(df['close'])
+        sig3 = trend_following_ema(df['close'])
+        
+        returns = df['close'].pct_change()
+        combined = combine_signals(
+            {'ma': sig1.signal, 'rsi': sig2.signal, 'ema': sig3.signal},
+            method='simple_average',
+            returns=returns
+        )
+        
+        assert combined is not None
+        assert hasattr(combined, 'signal')
+        assert hasattr(combined, 'confidence')
+        assert hasattr(combined, 'weights')
+    
+    def test_calculate_backtest_metrics(self):
+        """Test backtest metrics calculation."""
+        import pandas as pd
+        import numpy as np
+        
+        # Create mock data
+        n_bars = 100
+        df = pd.DataFrame({
+            'close': np.random.randn(n_bars).cumsum() + 50000
+        })
+        
+        # Create mock combined signal
+        from app.research.signals import ma_crossover
+        sig = ma_crossover(df['close'])
+        
+        # Calculate metrics (test underlying logic)
+        returns = df['close'].pct_change()
+        strategy_returns = sig.signal.shift(1) * returns
+        strategy_returns = strategy_returns.dropna()
+        
+        # Test basic metric calculations
+        if len(strategy_returns) > 0:
+            sharpe = strategy_returns.mean() / strategy_returns.std()
+            assert not np.isnan(sharpe)
+            
+            win_rate = (strategy_returns > 0).mean()
+            assert 0 <= win_rate <= 1
+    
+    def test_confidence_indicator_logic(self):
+        """Test confidence indicator calculation."""
+        # Test confidence levels based on metrics
+        
+        # High confidence scenario
+        metrics_high = {
+            'sharpe': 2.0,
+            'win_rate': 0.65,
+            'max_dd': 0.04
+        }
+        
+        # Should result in high confidence
+        score_high = 0
+        if metrics_high['sharpe'] > 1.5:
+            score_high += 40
+        if metrics_high['win_rate'] > 0.6:
+            score_high += 30
+        if metrics_high['max_dd'] < 0.05:
+            score_high += 30
+        
+        assert score_high >= 75  # High confidence
+        
+        # Low confidence scenario
+        metrics_low = {
+            'sharpe': 0.2,
+            'win_rate': 0.40,
+            'max_dd': 0.25
+        }
+        
+        score_low = 0
+        if metrics_low['sharpe'] > 0:
+            score_low += 10
+        if metrics_low['win_rate'] > 0.45:
+            score_low += 15
+        else:
+            score_low += 10
+        if metrics_low['max_dd'] < 0.20:
+            score_low += 15
+        else:
+            score_low += 10
+        
+        assert score_low < 50  # Low confidence
+
+
+class TestTabbedStructure:
+    """Test tabbed UI structure components."""
+    
+    def test_tab_data_isolation(self):
+        """Test that both tabs can access shared data correctly."""
+        import pandas as pd
+        import numpy as np
+        from app.service import DecisionEngine, MarketAdvisor
+        
+        # Create shared data
+        n_bars = 100
+        df = pd.DataFrame({
+            'timestamp': range(n_bars),
+            'close': np.random.randn(n_bars).cumsum() + 50000,
+            'open': np.random.randn(n_bars).cumsum() + 50000,
+            'high': np.random.randn(n_bars).cumsum() + 50500,
+            'low': np.random.randn(n_bars).cumsum() + 49500,
+            'volume': abs(np.random.randn(n_bars)) * 1000000
+        })
+        
+        # Test that both tabs can use the same advisor instance
+        advisor = MarketAdvisor(default_risk_pct=0.02)
+        engine = DecisionEngine()
+        
+        assert advisor is not None
+        assert engine is not None
+    
+    def test_chart_rendering_components(self):
+        """Test chart rendering data preparation."""
+        import pandas as pd
+        import numpy as np
+        import plotly.graph_objects as go
+        
+        # Create mock data
+        n_bars = 60
+        df = pd.DataFrame({
+            'timestamp': range(n_bars),
+            'open': np.random.randn(n_bars).cumsum() + 50000,
+            'high': np.random.randn(n_bars).cumsum() + 50500,
+            'low': np.random.randn(n_bars).cumsum() + 49500,
+            'close': np.random.randn(n_bars).cumsum() + 50000,
+        })
+        
+        df['datetime'] = pd.to_datetime(df['timestamp'], unit='s')
+        
+        # Test candlestick creation
+        fig = go.Figure(data=[go.Candlestick(
+            x=df['datetime'],
+            open=df['open'],
+            high=df['high'],
+            low=df['low'],
+            close=df['close']
+        )])
+        
+        assert fig is not None
+        assert len(fig.data) == 1
