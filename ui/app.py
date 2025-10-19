@@ -466,39 +466,39 @@ if df is not None and len(df) > 0:
             st.subheader("📍 Señal de Hoy")
             
             col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            signal_value = int(combined.signal.iloc[-1])
-            if signal_value == 1:
-                    st.metric("Dirección", "🟢 LONG", delta="Buy")
-            elif signal_value == -1:
-                    st.metric("Dirección", "🔴 SHORT", delta="Sell")
-            else:
-                    st.metric("Dirección", "⚪ FLAT", delta="Wait")
-        
-        with col2:
-            confidence = float(combined.confidence.iloc[-1])
-                st.metric("Confianza Señal", f"{confidence:.0%}")
-        
-        with col3:
-            current_price = float(df['close'].iloc[-1])
-                st.metric("Precio Actual", f"${current_price:,.2f}")
-        
-        with col4:
-            if decision and decision.should_execute:
-                    st.metric("Estado", "✅ EJECUTAR")
-            else:
-                    st.metric("Estado", "⏸️ SKIP")
-        
-        st.markdown("---")
-        
-            # Trading details (if should execute)
-        if decision and decision.should_execute:
-                st.subheader("💰 Plan de Trade")
-            
-            col1, col2 = st.columns(2)
             
             with col1:
+                signal_value = int(combined.signal.iloc[-1])
+                if signal_value == 1:
+                    st.metric("Dirección", "🟢 LONG", delta="Buy")
+                elif signal_value == -1:
+                    st.metric("Dirección", "🔴 SHORT", delta="Sell")
+                else:
+                    st.metric("Dirección", "⚪ FLAT", delta="Wait")
+            
+            with col2:
+                confidence = float(combined.confidence.iloc[-1])
+                st.metric("Confianza Señal", f"{confidence:.0%}")
+            
+            with col3:
+                current_price = float(df['close'].iloc[-1])
+                st.metric("Precio Actual", f"${current_price:,.2f}")
+            
+            with col4:
+                if decision and decision.should_execute:
+                    st.metric("Estado", "✅ EJECUTAR")
+                else:
+                    st.metric("Estado", "⏸️ SKIP")
+            
+            st.markdown("---")
+            
+            # Trading details (if should execute)
+            if decision and decision.should_execute:
+                st.subheader("💰 Plan de Trade")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
                     st.markdown("**📍 Entrada**")
                     st.metric("Precio de Entrada", f"${decision.entry_price:,.2f}")
                     if decision.entry_mid:
@@ -508,18 +508,18 @@ if df is not None and len(df) > 0:
                     if decision.position_size:
                         st.metric("Cantidad", f"{decision.position_size.quantity:.4f}")
                         st.metric("Valor Nocional", f"${decision.position_size.notional_value:,.2f}")
-            
-            with col2:
+                
+                with col2:
                     st.markdown("**🛡️ Gestión de Riesgo**")
-                st.metric("Stop Loss", f"${decision.stop_loss:,.2f}" if decision.stop_loss else "N/A")
-                st.metric("Take Profit", f"${decision.take_profit:,.2f}" if decision.take_profit else "N/A")
+                    st.metric("Stop Loss", f"${decision.stop_loss:,.2f}" if decision.stop_loss else "N/A")
+                    st.metric("Take Profit", f"${decision.take_profit:,.2f}" if decision.take_profit else "N/A")
                     
-                if decision.stop_loss and decision.take_profit:
-                    risk = abs(decision.entry_price - decision.stop_loss)
-                    reward = abs(decision.take_profit - decision.entry_price)
-                    rr = reward / risk if risk > 0 else 0
-                    st.metric("R/R Ratio", f"{rr:.2f}")
-            
+                    if decision.stop_loss and decision.take_profit:
+                        risk = abs(decision.entry_price - decision.stop_loss)
+                        reward = abs(decision.take_profit - decision.entry_price)
+                        rr = reward / risk if risk > 0 else 0
+                        st.metric("R/R Ratio", f"{rr:.2f}")
+                    
                     if decision.position_size:
                         st.metric("Riesgo ($)", f"${decision.position_size.risk_amount:,.2f}")
                 
@@ -537,37 +537,37 @@ if df is not None and len(df) > 0:
                     st.warning("⏸️ Fuera de horario de trading")
                 
                 # Action buttons
-            st.markdown("---")
+                st.markdown("---")
                 st.subheader("🎯 Acciones")
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                if st.button("📄 Ejecutar Paper Trade", use_container_width=True, type="primary"):
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    if st.button("📄 Ejecutar Paper Trade", use_container_width=True, type="primary"):
                         st.success("✅ **Paper trade ejecutado!** Operación registrada en modo simulación.")
-            
-            with col2:
-                if mode == "Live Trading":
-                    if st.button("💰 Ejecutar Live Trade", use_container_width=True, type="primary"):
+                
+                with col2:
+                    if mode == "Live Trading":
+                        if st.button("💰 Ejecutar Live Trade", use_container_width=True, type="primary"):
                             st.warning("⚠️ **Live trading no implementado aún.** Usa paper trading.")
-                else:
+                    else:
                         st.info("📄 Modo Paper activo")
-            
-            with col3:
+                
+                with col3:
                     if st.button("💾 Guardar Plan", use_container_width=True):
                         st.info("💾 **Plan guardado!** Disponible en historial.")
-        
-        else:
+            
+            else:
                 # No trade today
-            if decision and decision.skip_reason:
+                if decision and decision.skip_reason:
                     if "trading hours" in decision.skip_reason.lower():
                         st.info("⏰ **Fuera de horario de trading.** Ventanas: 09:00-12:30 y 14:00-17:00 (UTC-3).")
                     else:
                         st.info(f"ℹ️ **No hay trade hoy:** {decision.skip_reason}")
-            else:
+                else:
                     st.info("⏸️ **No hay trade hoy.** Esperando mejores condiciones.")
-        
-        st.markdown("---")
+            
+            st.markdown("---")
             
             # Chart
             st.subheader("📈 Gráfico de Precio")
@@ -582,133 +582,133 @@ if df is not None and len(df) > 0:
             st.markdown("---")
             
             # Multi-horizon analysis
-        if advice:
+            if advice:
                 st.header("🧭 Análisis Multi-Horizonte")
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
                     st.subheader("📊 Corto Plazo (Hoy)")
                     st.metric("Señal", "LONG" if advice.short_term.signal == 1 else ("SHORT" if advice.short_term.signal == -1 else "FLAT"))
                     st.metric("Timing de Entrada", advice.short_term.entry_timing.upper())
                     st.metric("Volatilidad", advice.short_term.volatility_state.upper())
                     st.metric("Riesgo Recomendado", f"{advice.short_term.recommended_risk_pct:.2%}")
-            
-            with col2:
+                
+                with col2:
                     st.subheader("📈 Medio Plazo (Semana)")
                     st.metric("Tendencia", "BULLISH" if advice.medium_term.trend_direction == 1 else ("BEARISH" if advice.medium_term.trend_direction == -1 else "NEUTRAL"))
                     st.metric("Posición EMA200", advice.medium_term.ema200_position.upper())
                     st.metric("Filtro", advice.medium_term.filter_recommendation.upper())
                     st.metric("RSI Semanal", f"{advice.medium_term.rsi_weekly:.1f}")
-            
-            with col3:
+                
+                with col3:
                     st.subheader("🌍 Largo Plazo (Régimen)")
                     st.metric("Régimen", advice.long_term.regime.upper())
                     st.metric("Vol Régimen", advice.long_term.volatility_regime.upper())
                     st.metric("Exposición Rec", f"{advice.long_term.recommended_exposure:.0%}")
                     st.metric("Prob Régimen", f"{advice.long_term.regime_probability:.0%}")
-            
-            # Consensus
-            st.markdown("---")
+                
+                # Consensus
+                st.markdown("---")
                 st.subheader("🎯 Consenso")
                 
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                if advice.consensus_direction == 1:
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    if advice.consensus_direction == 1:
                         st.success("Dirección: LONG")
-                elif advice.consensus_direction == -1:
+                    elif advice.consensus_direction == -1:
                         st.error("Dirección: SHORT")
-                else:
+                    else:
                         st.info("Dirección: NEUTRAL")
-            
-            with col2:
+                
+                with col2:
                     st.metric("Confianza Global", f"{advice.confidence_score:.0%}")
-            
-            with col3:
+                
+                with col3:
                     st.metric("Riesgo Final Rec", f"{advice.recommended_risk_pct:.2%}")
-        
-        st.markdown("---")
+            
+            st.markdown("---")
             
             # Performance metrics
             st.header("📊 Métricas de Performance (12 Meses)")
             
             if metrics:
-            col1, col2, col3, col4, col5, col6 = st.columns(6)
-            
-            with col1:
+                col1, col2, col3, col4, col5, col6 = st.columns(6)
+                
+                with col1:
                     st.metric("CAGR", f"{metrics['cagr']:.1%}")
-            
-            with col2:
+                
+                with col2:
                     st.metric("Sharpe", f"{metrics['sharpe']:.2f}")
-            
-            with col3:
+                
+                with col3:
                     st.metric("Calmar", f"{metrics['calmar']:.2f}")
-            
-            with col4:
+                
+                with col4:
                     st.metric("Max DD", f"{metrics['max_dd']:.1%}")
-            
-            with col5:
+                
+                with col5:
                     st.metric("Win Rate", f"{metrics['win_rate']:.1%}")
-            
-            with col6:
+                
+                with col6:
                     st.metric("Profit Factor", f"{metrics['profit_factor']:.2f}")
-            
-            # Equity curve
+                
+                # Equity curve
                 st.subheader("📈 Curva de Equity")
-            
-            equity_df = pd.DataFrame({
+                
+                equity_df = pd.DataFrame({
                     'datetime': df.tail(metrics['lookback'])['timestamp'].apply(lambda x: pd.to_datetime(x, unit='ms')),
                     'equity': capital * metrics['equity']
-            })
-            
-            fig_equity = go.Figure()
-            fig_equity.add_trace(go.Scatter(
-                x=equity_df['datetime'],
-                y=equity_df['equity'],
-                mode='lines',
-                name='Equity',
-                line=dict(color='blue', width=2)
-            ))
-            
-            fig_equity.update_layout(
-                title="Equity Curve",
-                yaxis_title="Capital ($)",
-                xaxis_title="Time",
-                height=300,
-                hovermode='x unified'
-            )
-            
-            st.plotly_chart(fig_equity, use_container_width=True)
-            
-            # Drawdown chart
+                })
+                
+                fig_equity = go.Figure()
+                fig_equity.add_trace(go.Scatter(
+                    x=equity_df['datetime'],
+                    y=equity_df['equity'],
+                    mode='lines',
+                    name='Equity',
+                    line=dict(color='blue', width=2)
+                ))
+                
+                fig_equity.update_layout(
+                    title="Equity Curve",
+                    yaxis_title="Capital ($)",
+                    xaxis_title="Time",
+                    height=300,
+                    hovermode='x unified'
+                )
+                
+                st.plotly_chart(fig_equity, use_container_width=True)
+                
+                # Drawdown chart
                 st.subheader("📉 Drawdown")
-            
-            dd_df = pd.DataFrame({
+                
+                dd_df = pd.DataFrame({
                     'datetime': df.tail(metrics['lookback'])['timestamp'].apply(lambda x: pd.to_datetime(x, unit='ms')),
                     'drawdown': metrics['drawdown'] * 100
-            })
+                })
+                
+                fig_dd = go.Figure()
+                fig_dd.add_trace(go.Scatter(
+                    x=dd_df['datetime'],
+                    y=dd_df['drawdown'],
+                    mode='lines',
+                    name='Drawdown',
+                    fill='tozeroy',
+                    line=dict(color='red', width=1)
+                ))
+                
+                fig_dd.update_layout(
+                    title="Drawdown (%)",
+                    yaxis_title="Drawdown (%)",
+                    xaxis_title="Time",
+                    height=250,
+                    hovermode='x unified'
+                )
+                
+                st.plotly_chart(fig_dd, use_container_width=True)
             
-            fig_dd = go.Figure()
-            fig_dd.add_trace(go.Scatter(
-                x=dd_df['datetime'],
-                y=dd_df['drawdown'],
-                mode='lines',
-                name='Drawdown',
-                fill='tozeroy',
-                line=dict(color='red', width=1)
-            ))
-            
-            fig_dd.update_layout(
-                title="Drawdown (%)",
-                yaxis_title="Drawdown (%)",
-                xaxis_title="Time",
-                height=250,
-                hovermode='x unified'
-            )
-            
-            st.plotly_chart(fig_dd, use_container_width=True)
-        
             st.markdown("---")
             
             # Strategy breakdown
@@ -737,8 +737,8 @@ if df is not None and len(df) > 0:
                         for k, v in combined.weights.items()
                     ])
                     st.dataframe(weights_df, use_container_width=True, hide_index=True)
-        
-        st.markdown("---")
+            
+            st.markdown("---")
             
             # Historical trades (placeholder - would require trade log storage)
             with st.expander("📜 Trades Históricos", expanded=False):
@@ -765,18 +765,18 @@ if df is not None and len(df) > 0:
             # Data status
             with st.expander("ℹ️ Estado de Datos", expanded=False):
                 st.subheader("Información del Dataset")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
                     st.metric("Barras Cargadas", len(df))
-        
-        with col2:
-            latest_ts = pd.to_datetime(df['timestamp'].iloc[-1], unit='ms')
+                
+                with col2:
+                    latest_ts = pd.to_datetime(df['timestamp'].iloc[-1], unit='ms')
                     st.metric("Última Actualización", latest_ts.strftime('%Y-%m-%d %H:%M'))
-        
-        with col3:
-            data_age = datetime.now() - latest_ts.replace(tzinfo=None)
+                
+                with col3:
+                    data_age = datetime.now() - latest_ts.replace(tzinfo=None)
                     st.metric("Antigüedad", f"{data_age.total_seconds() / 60:.0f} min")
                 
                 # Metadata from store

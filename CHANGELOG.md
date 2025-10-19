@@ -5,6 +5,43 @@ Todos los cambios notables en One Market serán documentados en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.0/),
 y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [2.0.0] - 2025-10-19
+
+### Agregado
+- **Navegación por Pestañas**: Nueva estructura UI con tabs "Trading Plan" y "Deep Dive"
+  - Tab Trading Plan: Vista rápida para decisión matutina en 2-3 minutos
+  - Tab Deep Dive: Análisis completo con métricas detalladas y desglose de estrategias
+- **Indicador de Confianza**: Sistema de semáforo (🟢/🟡/🔴) basado en métricas de backtest rolling 12 meses
+  - Algoritmo de scoring combina Sharpe ratio, win rate y max drawdown
+  - Recomendaciones claras de acción para cada nivel de confianza
+- **Funciones Helper Compartidas**: Carga de datos y cálculo de métricas centralizados
+  - `load_ohlcv_data()`: Carga de datos con cache de 5 minutos
+  - `calculate_signals_and_weights()`: Generación de señales multi-estrategia
+  - `create_decision()`: Motor de decisión con market advisor integrado
+  - `calculate_backtest_metrics()`: Métricas de performance rolling
+  - `get_confidence_indicator()`: Sistema de scoring de confianza
+  - `render_price_chart()`: Gráfico Plotly con niveles de entrada/SL/TP
+- **Tests UI Mejorados**: Nuevas clases de test para estructura tabulada y helpers
+  - `TestUIHelperFunctions`: Tests para cálculo de señales y métricas
+  - `TestTabbedStructure`: Tests para aislamiento de datos y rendering de charts
+
+### Cambiado
+- **Arquitectura UI**: Refactorizada de página única a layout con tabs
+  - Sidebar de configuración compartido entre tabs
+  - Banner de workflow removido en favor de tabs simplificados
+  - Carga de datos optimizada con caching centralizado
+- **Documentación**: Actualizado UI_GUIDE.md v2.0
+  - Nuevos workflows para trading matutino y análisis de fin de semana
+  - Guía de interpretación del indicador de confianza
+  - Tips y best practices para cada tab
+  - Versión actualizada a 2.0.0
+
+### Mejorado
+- **Performance**: Cache de datos compartido reduce fetching redundante
+- **UX**: Separación clara entre acciones rápidas y análisis detallado
+- **Calidad de Código**: Código repetitivo refactorizado en funciones reutilizables
+- **Mantenibilidad**: Helpers centralizados hacen la UI más fácil de extender
+
 ## [0.1.0] - 2024-10-17
 
 ### Epic 1 - Fundaciones de Datos y Almacenamiento ✅
