@@ -473,3 +473,4 @@ Apr 2025  │ Epic 7
 **Próximo epic**: Epic 2 - Estrategias Cuantitativas
 
 
+

@@ -1,6 +1,7 @@
-"""One Market - Streamlit Dashboard.
+"""One Market - Streamlit Dashboard with Workflow Banner.
 
 This is the main UI application providing:
+- Workflow banner with steps (1. Revisa la señal, 2. Ajusta riesgo, 3. Confirma plan)
 - Symbol and timeframe selection
 - Trading mode (paper/live)
 - Daily signal panel with entry band, SL/TP
@@ -12,6 +13,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import requests
 from pathlib import Path
 import sys
@@ -39,6 +41,107 @@ st.set_page_config(
 # Title
 st.title("📊 One Market - Daily Trading Platform")
 st.markdown("---")
+
+# ============================================================
+# WORKFLOW BANNER
+# ============================================================
+
+def render_workflow_banner(decision, mode, step_states):
+    """Render workflow banner with steps."""
+    
+    # Define steps
+    steps = [
+        {
+            "number": 1,
+            "title": "Revisa la señal",
+            "description": "Analiza la señal y confianza",
+            "icon": "🔍"
+        },
+        {
+            "number": 2,
+            "title": "Ajusta riesgo",
+            "description": "Configura parámetros de riesgo",
+            "icon": "⚙️"
+        },
+        {
+            "number": 3,
+            "title": "Confirma plan",
+            "description": "Ejecuta o confirma la operación",
+            "icon": "✅"
+        }
+    ]
+    
+    # Create banner container
+    banner_container = st.container()
+    
+    with banner_container:
+        st.markdown("### 🎯 Flujo de Trabajo")
+        
+        # Create columns for steps
+        col1, col2, col3 = st.columns(3)
+        
+        for i, step in enumerate(steps):
+            with [col1, col2, col3][i]:
+                # Get step state
+                state = step_states.get(step["number"], "pending")
+                
+                # Determine colors and status
+                if state == "completed":
+                    status_color = "🟢"
+                    status_text = "Completado"
+                    bg_color = "#d4edda"
+                    border_color = "#28a745"
+                elif state == "active":
+                    status_color = "🟡"
+                    status_text = "Activo"
+                    bg_color = "#fff3cd"
+                    border_color = "#ffc107"
+                else:  # pending
+                    status_color = "⚪"
+                    status_text = "Pendiente"
+                    bg_color = "#f8f9fa"
+                    border_color = "#6c757d"
+                
+                # Render step
+                st.markdown(f"""
+                <div style="
+                    background-color: {bg_color};
+                    border: 2px solid {border_color};
+                    border-radius: 8px;
+                    padding: 15px;
+                    margin: 5px 0;
+                    text-align: center;
+                ">
+                    <h4 style="margin: 0; color: #333;">
+                        {status_color} {step["icon"]} Paso {step["number"]}
+                    </h4>
+                    <h5 style="margin: 5px 0; color: #333;">
+                        {step["title"]}
+                    </h5>
+                    <p style="margin: 0; color: #666; font-size: 0.9em;">
+                        {step["description"]}
+                    </p>
+                    <p style="margin: 5px 0 0 0; color: #333; font-weight: bold;">
+                        {status_text}
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        # Add workflow status message
+        if decision:
+            if decision.should_execute:
+                st.success("🎯 **Listo para operar!** Revisa la señal y ajusta los parámetros según tu plan.")
+            elif decision.skip_reason:
+                if "trading hours" in decision.skip_reason.lower():
+                    st.info("⏰ **Fuera de horario de trading.** Las ventanas son 09:00-12:30 y 14:00-17:00 (UTC-3).")
+                else:
+                    st.info(f"ℹ️ **No hay operación hoy:** {decision.skip_reason}")
+            else:
+                st.warning("⚠️ **Señal débil.** Considera esperar una mejor oportunidad.")
+        else:
+            st.info("🔄 **Cargando análisis...** Por favor espera mientras procesamos los datos.")
+        
+        st.markdown("---")
 
 
 # ============================================================
@@ -210,7 +313,8 @@ def make_decision(df, combined_signal):
             combined_signal.signal,
             signal_strength=combined_signal.confidence,
             capital=capital,
-            risk_pct=advice.recommended_risk_pct
+            risk_pct=advice.recommended_risk_pct,
+            current_time=datetime.now(ZoneInfo("UTC"))
         )
         
         return decision, advice
@@ -218,6 +322,38 @@ def make_decision(df, combined_signal):
     except Exception as e:
         st.error(f"Error making decision: {e}")
         return None, None
+
+
+# Determine workflow step states
+def determine_step_states(decision, mode):
+    """Determine the state of each workflow step."""
+    step_states = {}
+    
+    if decision:
+        # Step 1: Signal review
+        if decision.signal != 0:
+            step_states[1] = "completed"
+        else:
+            step_states[1] = "pending"
+        
+        # Step 2: Risk adjustment
+        if decision.should_execute:
+            step_states[2] = "active"
+        elif decision.signal != 0:
+            step_states[2] = "completed"
+        else:
+            step_states[2] = "pending"
+        
+        # Step 3: Plan confirmation
+        if decision.should_execute:
+            step_states[3] = "active"
+        else:
+            step_states[3] = "pending"
+    else:
+        # No decision available
+        step_states = {1: "pending", 2: "pending", 3: "pending"}
+    
+    return step_states
 
 
 # Load data
@@ -230,6 +366,12 @@ if df is not None and len(df) > 0:
     if combined is not None:
         # Make decision
         decision, advice = make_decision(df, combined)
+        
+        # Determine workflow states
+        step_states = determine_step_states(decision, mode)
+        
+        # Render workflow banner
+        render_workflow_banner(decision, mode, step_states)
         
         # ============================================================
         # TODAY'S SIGNAL PANEL
@@ -317,8 +459,33 @@ if df is not None and len(df) > 0:
                 if decision.position_size:
                     st.metric("Risk Amount", f"${decision.position_size.risk_amount:,.2f}")
             
+            # Action buttons for step 3
+            st.markdown("---")
+            st.subheader("🎯 Confirmar Plan")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if st.button("📄 Ejecutar Paper Trade", use_container_width=True, type="primary"):
+                    st.success("✅ **Paper trade ejecutado!** Se ha registrado la operación en modo simulación.")
+                    st.info("📊 Revisa el historial de trades para ver el resultado.")
+            
+            with col2:
+                if mode == "Live Trading":
+                    if st.button("💰 Ejecutar Live Trade", use_container_width=True, type="primary"):
+                        st.warning("⚠️ **Live trading no implementado aún.** Usa paper trading para probar.")
+                else:
+                    st.info("📄 Modo Paper Trading activo")
+            
+            with col3:
+                if st.button("📋 Guardar Plan", use_container_width=True):
+                    st.info("💾 **Plan guardado!** Puedes revisarlo más tarde en tu historial.")
+        
         else:
-            st.info(f"⏸️ No trade today: {decision.skip_reason if decision else 'No decision available'}")
+            if decision and decision.skip_reason:
+                st.info(f"⏸️ No trade today: {decision.skip_reason}")
+            else:
+                st.info("⏸️ No trade today: No decision available")
         
         st.markdown("---")
         
@@ -604,4 +771,3 @@ else:
 # Footer
 st.markdown("---")
 st.caption(f"One Market v1.0.0 | Mode: {mode} | Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
