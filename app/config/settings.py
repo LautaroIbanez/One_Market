@@ -1,9 +1,42 @@
 """Configuration settings for One Market platform."""
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Dict
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, BaseModel
+
+
+# ============================================================
+# RISK PROFILES (NEW v2.0)
+# ============================================================
+
+class RiskProfile(BaseModel):
+    """Risk profile configuration for different capital levels."""
+    
+    name: str
+    display_name: str
+    description: str
+    
+    # Capital constraints
+    min_capital: float
+    max_capital: float
+    
+    # Risk parameters
+    default_risk_pct: float
+    max_risk_pct: float
+    min_position_size_usd: float
+    
+    # Fee/slippage
+    commission_pct: float
+    slippage_pct: float
+    
+    # Position sizing
+    max_position_pct: float  # Max % of capital per position
+    max_leverage: float
+    
+    # TP/SL defaults
+    default_atr_multiplier_sl: float
+    default_atr_multiplier_tp: float
 
 
 class Settings(BaseSettings):
@@ -116,6 +149,91 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
+
+
+# ============================================================
+# PREDEFINED RISK PROFILES (NEW v2.0)
+# ============================================================
+
+RISK_PROFILES: Dict[str, RiskProfile] = {
+    "starter_1k": RiskProfile(
+        name="starter_1k",
+        display_name="🌱 Starter - $1K",
+        description="Para capital inicial de $1,000 - Conservador y educativo",
+        min_capital=500.0,
+        max_capital=2000.0,
+        default_risk_pct=0.015,  # 1.5%
+        max_risk_pct=0.02,  # 2.0%
+        min_position_size_usd=10.0,
+        commission_pct=0.001,  # 0.1% Binance spot
+        slippage_pct=0.0005,
+        max_position_pct=0.20,  # Max 20% en una posición
+        max_leverage=1.0,  # Sin leverage
+        default_atr_multiplier_sl=2.5,
+        default_atr_multiplier_tp=4.0
+    ),
+    "intermediate_5k": RiskProfile(
+        name="intermediate_5k",
+        display_name="📈 Intermediate - $5K",
+        description="Para capital de $5,000 - Balance entre crecimiento y protección",
+        min_capital=3000.0,
+        max_capital=10000.0,
+        default_risk_pct=0.02,  # 2.0%
+        max_risk_pct=0.03,  # 3.0%
+        min_position_size_usd=50.0,
+        commission_pct=0.001,
+        slippage_pct=0.0005,
+        max_position_pct=0.25,
+        max_leverage=1.0,
+        default_atr_multiplier_sl=2.0,
+        default_atr_multiplier_tp=3.5
+    ),
+    "advanced_25k": RiskProfile(
+        name="advanced_25k",
+        display_name="💎 Advanced - $25K",
+        description="Para capital de $25,000+ - Activo con gestión profesional",
+        min_capital=15000.0,
+        max_capital=100000.0,
+        default_risk_pct=0.02,  # 2.0%
+        max_risk_pct=0.04,  # 4.0%
+        min_position_size_usd=200.0,
+        commission_pct=0.001,
+        slippage_pct=0.0003,  # Mejor ejecución
+        max_position_pct=0.30,
+        max_leverage=1.0,
+        default_atr_multiplier_sl=1.8,
+        default_atr_multiplier_tp=3.0
+    ),
+    "pro_100k": RiskProfile(
+        name="pro_100k",
+        display_name="🏆 Professional - $100K+",
+        description="Para capital profesional de $100,000+ - Máxima flexibilidad",
+        min_capital=75000.0,
+        max_capital=1000000.0,
+        default_risk_pct=0.02,  # 2.0%
+        max_risk_pct=0.05,  # 5.0%
+        min_position_size_usd=500.0,
+        commission_pct=0.0008,  # VIP tier
+        slippage_pct=0.0002,
+        max_position_pct=0.35,
+        max_leverage=2.0,  # Puede usar leverage
+        default_atr_multiplier_sl=1.5,
+        default_atr_multiplier_tp=2.5
+    )
+}
+
+
+def get_risk_profile_for_capital(capital: float) -> RiskProfile:
+    """Get appropriate risk profile based on capital amount."""
+    if capital < 2000:
+        return RISK_PROFILES["starter_1k"]
+    elif capital < 10000:
+        return RISK_PROFILES["intermediate_5k"]
+    elif capital < 100000:
+        return RISK_PROFILES["advanced_25k"]
+    else:
+        return RISK_PROFILES["pro_100k"]
+
 
 
 # Timeframe mappings to milliseconds

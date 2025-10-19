@@ -265,8 +265,10 @@ def calculate_metrics(portfolio, periods_per_year: int = 252) -> Dict[str, Any]:
     
     # Drawdown metrics
     max_dd, peak_idx, trough_idx = calculate_max_drawdown(equity)
-    drawdown = portfolio.drawdown()
-    avg_dd = abs(drawdown.drawdown().mean())
+    portfolio_value = portfolio.value()
+    running_max = portfolio_value.expanding().max()
+    drawdown = (portfolio_value - running_max) / running_max
+    avg_dd = abs(drawdown.mean())
     
     calmar = calculate_calmar_ratio(cagr, max_dd)
     mar = calculate_mar_ratio(cagr, avg_dd)

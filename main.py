@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 app = FastAPI(
     title="One Market API",
     description="Trading platform API for signal generation, backtesting, and decision making",
-    version="1.0.0"
+    version="2.0.0"
 )
 
 # CORS
@@ -382,6 +382,299 @@ async def list_strategies():
     return {
         "strategies": get_strategy_list(),
         "count": len(get_strategy_list())
+    }
+
+
+# ============================================================
+# STRATEGY RANKING & SELECTION (NEW v2.0)
+# ============================================================
+
+@app.get("/strategy/best")
+async def get_best_strategy(
+    symbol: str = "BTC-USDT",
+    timeframe: str = "1h",
+    capital: float = 1000.0,
+    ranking_method: str = "composite"
+):
+    """Get the best performing strategy for today."""
+    try:
+        from app.service.strategy_ranking import StrategyRankingService
+        
+        service = StrategyRankingService(capital=capital, max_risk_pct=0.02, lookback_days=90)
+        recommendation = service.get_daily_recommendation(
+            symbol=symbol,
+            timeframe=timeframe,
+            capital=capital,
+            ranking_method=ranking_method
+        )
+        
+        if recommendation is None:
+            raise HTTPException(status_code=404, detail="No strategies available")
+        
+        return recommendation.model_dump()
+    
+    except Exception as e:
+        logger.error(f"Error getting best strategy: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/strategy/compare")
+async def compare_strategies(
+    symbol: str = "BTC-USDT",
+    timeframe: str = "1h",
+    capital: float = 1000.0
+):
+    """Compare all strategies performance."""
+    try:
+        from app.service.strategy_ranking import StrategyRankingService
+        
+        service = StrategyRankingService(capital=capital)
+        comparison_df = service.compare_strategies(symbol, timeframe)
+        
+        if comparison_df.empty:
+            return {"strategies": [], "count": 0}
+        
+        return {
+            "strategies": comparison_df.to_dict('records'),
+            "count": len(comparison_df)
+        }
+    
+    except Exception as e:
+        logger.error(f"Error comparing strategies: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/strategy/rankings")
+async def get_strategy_rankings(
+    symbol: Optional[str] = None,
+    timeframe: Optional[str] = None,
+    limit: int = 10
+):
+    """Get recent strategy rankings from database."""
+    try:
+        db = PaperTradingDB()
+        rankings = db.get_strategy_rankings(symbol, timeframe, limit)
+        
+        return {
+            "rankings": rankings,
+            "count": len(rankings)
+        }
+    
+    except Exception as e:
+        logger.error(f"Error getting rankings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# TRADE HISTORY & METRICS (NEW v2.0)
+# ============================================================
+
+@app.get("/trades/history")
+async def get_trade_history(
+    symbol: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100
+):
+    """Get historical trades with filters."""
+    try:
+        db = PaperTradingDB()
+        trades = db.get_all_trades(symbol=symbol)
+        
+        # Filter by date range if provided
+        if start_date or end_date:
+            filtered_trades = []
+            for trade in trades:
+                trade_date = datetime.fromisoformat(trade.entry_time).date()
+                
+                if start_date and trade_date < datetime.fromisoformat(start_date).date():
+                    continue
+                if end_date and trade_date > datetime.fromisoformat(end_date).date():
+                    continue
+                
+                filtered_trades.append(trade)
+            trades = filtered_trades
+        
+        # Filter by status
+        if status:
+            trades = [t for t in trades if t.status == status]
+        
+        # Limit results
+        trades = trades[:limit]
+        
+        # Convert to dict
+        trades_data = [
+            {
+                'trade_id': t.trade_id,
+                'entry_time': t.entry_time.isoformat(),
+                'exit_time': t.exit_time.isoformat() if t.exit_time else None,
+                'symbol': t.symbol,
+                'side': t.side,
+                'entry_price': t.entry_price,
+                'exit_price': t.exit_price,
+                'stop_loss': t.stop_loss,
+                'take_profit': t.take_profit,
+                'quantity': t.quantity,
+                'realized_pnl': t.realized_pnl,
+                'realized_pnl_pct': t.realized_pnl_pct,
+                'status': t.status,
+                'exit_reason': t.exit_reason
+            }
+            for t in trades
+        ]
+        
+        return {
+            "trades": trades_data,
+            "count": len(trades_data)
+        }
+    
+    except Exception as e:
+        logger.error(f"Error getting trade history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/trades/stats")
+async def get_trade_statistics(
+    symbol: Optional[str] = None,
+    days: int = 30
+):
+    """Get aggregated trade statistics."""
+    try:
+        db = PaperTradingDB()
+        trades = db.get_all_trades(symbol=symbol)
+        
+        # Filter by date range
+        cutoff_date = datetime.now() - timedelta(days=days)
+        recent_trades = [
+            t for t in trades
+            if datetime.fromisoformat(t.entry_time) >= cutoff_date
+        ]
+        
+        # Calculate stats
+        if not recent_trades:
+            return {"stats": {}, "trades_count": 0}
+        
+        closed_trades = [t for t in recent_trades if t.status == "closed"]
+        winning_trades = [t for t in closed_trades if t.realized_pnl and t.realized_pnl > 0]
+        losing_trades = [t for t in closed_trades if t.realized_pnl and t.realized_pnl <= 0]
+        
+        total_pnl = sum([t.realized_pnl for t in closed_trades if t.realized_pnl])
+        avg_win = sum([t.realized_pnl for t in winning_trades]) / len(winning_trades) if winning_trades else 0
+        avg_loss = sum([t.realized_pnl for t in losing_trades]) / len(losing_trades) if losing_trades else 0
+        
+        stats = {
+            "total_trades": len(recent_trades),
+            "closed_trades": len(closed_trades),
+            "open_trades": len([t for t in recent_trades if t.status == "open"]),
+            "winning_trades": len(winning_trades),
+            "losing_trades": len(losing_trades),
+            "win_rate": len(winning_trades) / len(closed_trades) if closed_trades else 0,
+            "total_pnl": total_pnl,
+            "avg_win": avg_win,
+            "avg_loss": avg_loss,
+            "profit_factor": abs(avg_win / avg_loss) if avg_loss != 0 else 0
+        }
+        
+        return {
+            "stats": stats,
+            "trades_count": len(recent_trades),
+            "period_days": days
+        }
+    
+    except Exception as e:
+        logger.error(f"Error calculating trade stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/metrics/performance")
+async def get_performance_metrics(
+    symbol: str = "BTC-USDT",
+    timeframe: str = "1h",
+    strategy_name: Optional[str] = None,
+    days: int = 30
+):
+    """Get performance metrics history for strategies."""
+    try:
+        db = PaperTradingDB()
+        
+        if strategy_name:
+            # Get metrics for specific strategy
+            sharpe_history = db.get_strategy_performance_history(
+                strategy_name, symbol, timeframe, 'sharpe_ratio', days
+            )
+            win_rate_history = db.get_strategy_performance_history(
+                strategy_name, symbol, timeframe, 'win_rate', days
+            )
+            dd_history = db.get_strategy_performance_history(
+                strategy_name, symbol, timeframe, 'max_drawdown', days
+            )
+            
+            return {
+                "strategy": strategy_name,
+                "sharpe_history": sharpe_history,
+                "win_rate_history": win_rate_history,
+                "drawdown_history": dd_history
+            }
+        else:
+            # Get all strategy rankings
+            rankings = db.get_strategy_rankings(symbol, timeframe, limit=50)
+            return {
+                "rankings": rankings,
+                "count": len(rankings)
+            }
+    
+    except Exception as e:
+        logger.error(f"Error getting performance metrics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/alerts/divergence")
+async def get_divergence_alerts(days: int = 7):
+    """Get recent divergence alerts (real vs simulated performance)."""
+    try:
+        db = PaperTradingDB()
+        alerts = db.get_truth_data_alerts(days)
+        
+        return {
+            "alerts": alerts,
+            "count": len(alerts)
+        }
+    
+    except Exception as e:
+        logger.error(f"Error getting divergence alerts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# RISK PROFILES (NEW v2.0)
+# ============================================================
+
+@app.get("/profiles")
+async def get_risk_profiles():
+    """Get all available risk profiles."""
+    from app.config.settings import RISK_PROFILES, get_risk_profile_for_capital
+    
+    profiles_data = []
+    for profile_key, profile in RISK_PROFILES.items():
+        profiles_data.append(profile.model_dump())
+    
+    return {
+        "profiles": profiles_data,
+        "count": len(profiles_data)
+    }
+
+
+@app.get("/profiles/recommend")
+async def get_recommended_profile(capital: float):
+    """Get recommended risk profile for given capital."""
+    from app.config.settings import get_risk_profile_for_capital
+    
+    profile = get_risk_profile_for_capital(capital)
+    
+    return {
+        "recommended_profile": profile.model_dump(),
+        "capital": capital
     }
 
 

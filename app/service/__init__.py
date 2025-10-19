@@ -7,9 +7,10 @@ This package provides the daily trading decision logic:
 - Multi-horizon advisor (short/medium/long term)
 - Trade execution decision
 - Paper trading database
+- Strategy orchestrator and ranking (v2.0)
 """
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 
 from app.service.decision import DecisionEngine, DailyDecision
 from app.service.entry_band import (
@@ -33,6 +34,8 @@ from app.service.advisor import (
     integrate_backtest_metrics
 )
 from app.service.paper_trading import PaperTradingDB
+from app.service.strategy_orchestrator import StrategyOrchestrator, StrategyBacktestResult
+from app.service.strategy_ranking import StrategyRankingService, StrategyRecommendation
 
 __all__ = [
     'DecisionEngine',
@@ -45,6 +48,9 @@ __all__ = [
     'MarketAdvisor',
     'MultiHorizonAdvice',
     'PaperTradingDB',
-    'integrate_backtest_metrics'
+    'integrate_backtest_metrics',
+    'StrategyOrchestrator',
+    'StrategyRankingService',
+    'StrategyRecommendation'
 ]
 

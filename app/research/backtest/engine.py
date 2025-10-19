@@ -296,8 +296,10 @@ class BacktestEngine:
         total_return = portfolio.total_return()
         
         # Drawdown
-        drawdown = portfolio.drawdown()
-        max_dd = drawdown.max_drawdown()
+        portfolio_value = portfolio.value()
+        running_max = portfolio_value.expanding().max()
+        drawdown = (portfolio_value - running_max) / running_max
+        max_dd = drawdown.min()  # max_drawdown is the minimum value (most negative)
         
         # Trades
         trades = portfolio.trades.records
@@ -366,7 +368,7 @@ class BacktestEngine:
         recovery_factor = total_return / abs(max_dd) if max_dd != 0 else 0
         
         # MAR ratio (using average drawdown)
-        avg_dd = abs(drawdown.drawdown().mean())
+        avg_dd = abs(drawdown.mean())
         mar_ratio = cagr / avg_dd if avg_dd != 0 else 0
         
         # Exposure time
