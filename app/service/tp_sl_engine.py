@@ -54,6 +54,13 @@ class TPSLResult(BaseModel):
     
     method_used: Literal["atr", "swing", "hybrid"] = Field(..., description="Method used")
     swing_level: Optional[float] = Field(None, description="Swing level if used")
+    
+    sl_low: Optional[float] = Field(None, description="Lower bound of SL range (percentile)", gt=0)
+    sl_high: Optional[float] = Field(None, description="Upper bound of SL range (percentile)", gt=0)
+    tp_low: Optional[float] = Field(None, description="Lower bound of TP range (percentile)", gt=0)
+    tp_high: Optional[float] = Field(None, description="Upper bound of TP range (percentile)", gt=0)
+    sl_range_pct: Optional[float] = Field(None, description="SL range size as percentage")
+    tp_range_pct: Optional[float] = Field(None, description="TP range size as percentage")
 
 
 def find_swing_high(high: pd.Series, lookback: int = 20) -> float:
@@ -294,7 +301,9 @@ def calculate_tp_sl(
     df: pd.DataFrame,
     entry_price: float,
     signal_direction: int,
-    config: Optional[TPSLConfig] = None
+    config: Optional[TPSLConfig] = None,
+    calculate_ranges: bool = True,
+    atr_range_multiplier: float = 0.25
 ) -> TPSLResult:
     """Calculate TP/SL using configured method.
     
@@ -374,6 +383,32 @@ def calculate_tp_sl(
         result.reward_amount = abs(result.take_profit - entry_price)
         result.take_profit_pct = abs(result.take_profit - entry_price) / entry_price
         result.risk_reward_ratio = config.max_rr_ratio
+    
+    # Calculate SL/TP ranges based on ATR
+    if calculate_ranges and len(df) >= config.atr_period:
+        try:
+            atr_vals = atr(df['high'], df['low'], df['close'], config.atr_period)
+            current_atr = float(atr_vals.iloc[-1])
+            range_width = current_atr * atr_range_multiplier
+            
+            # SL range: result.stop_loss +/- range_width
+            result.sl_low = result.stop_loss - range_width
+            result.sl_high = result.stop_loss + range_width
+            result.sl_range_pct = (result.sl_high - result.sl_low) / entry_price
+            
+            # TP range: result.take_profit +/- range_width
+            result.tp_low = result.take_profit - range_width
+            result.tp_high = result.take_profit + range_width
+            result.tp_range_pct = (result.tp_high - result.tp_low) / entry_price
+            
+            # Ensure positive prices
+            result.sl_low = max(result.sl_low, entry_price * 0.5)
+            result.sl_high = max(result.sl_high, result.sl_low * 1.001)
+            result.tp_low = max(result.tp_low, entry_price * 0.5)
+            result.tp_high = max(result.tp_high, result.tp_low * 1.001)
+            
+        except Exception:
+            pass
     
     return result
 

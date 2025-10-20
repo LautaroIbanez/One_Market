@@ -9,6 +9,7 @@ from typing import Optional, Literal
 from pydantic import BaseModel, Field
 
 from app.research.features import daily_vwap_reconstructed
+from app.research.indicators import atr
 
 
 class EntryBandResult(BaseModel):
@@ -19,6 +20,9 @@ class EntryBandResult(BaseModel):
     beta: float = Field(..., description="Beta adjustment applied")
     method: Literal["vwap", "typical_price"] = Field(..., description="Method used")
     spread_pct: float = Field(default=0.0, description="Spread percentage applied")
+    entry_low: Optional[float] = Field(None, description="Lower bound of entry range", gt=0)
+    entry_high: Optional[float] = Field(None, description="Upper bound of entry range", gt=0)
+    range_pct: Optional[float] = Field(None, description="Range size as percentage of price")
 
 
 def calculate_entry_mid_vwap(
@@ -67,7 +71,10 @@ def calculate_entry_band(
     beta: float = 0.0,
     use_vwap: bool = True,
     min_distance_pct: float = 0.001,
-    max_distance_pct: float = 0.01
+    max_distance_pct: float = 0.01,
+    use_volatility_range: bool = True,
+    atr_period: int = 14,
+    atr_multiplier: float = 0.5
 ) -> EntryBandResult:
     """Calculate entry band with VWAP or typical price fallback.
     
@@ -131,12 +138,43 @@ def calculate_entry_band(
     # Calculate spread
     spread_pct = abs(entry_price - entry_mid) / entry_mid
     
+    # Calculate entry range based on volatility (ATR or std dev)
+    entry_low = None
+    entry_high = None
+    range_pct = None
+    
+    if use_volatility_range and len(df) >= atr_period:
+        try:
+            # Calculate ATR for volatility measure
+            atr_val = atr(df['high'], df['low'], df['close'], atr_period).iloc[-1]
+            
+            # Range bounds: entry_price +/- (ATR * multiplier)
+            range_width = atr_val * atr_multiplier
+            entry_low = entry_price - range_width
+            entry_high = entry_price + range_width
+            
+            # Ensure positive prices
+            entry_low = max(entry_low, entry_price * 0.5)
+            entry_high = max(entry_high, entry_price * 1.01)
+            
+            # Calculate range as percentage
+            range_pct = (entry_high - entry_low) / entry_price
+            
+        except Exception:
+            # Fallback: use percentage-based range
+            range_pct = 0.01  # 1% default range
+            entry_low = entry_price * (1 - range_pct / 2)
+            entry_high = entry_price * (1 + range_pct / 2)
+    
     return EntryBandResult(
         entry_price=entry_price,
         entry_mid=entry_mid,
         beta=beta,
         method=method,
-        spread_pct=spread_pct
+        spread_pct=spread_pct,
+        entry_low=entry_low,
+        entry_high=entry_high,
+        range_pct=range_pct
     )
 
 

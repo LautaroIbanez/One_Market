@@ -37,11 +37,20 @@ class DailyDecision(BaseModel):
     entry_price: Optional[float] = Field(None, description="Entry price", gt=0)
     entry_mid: Optional[float] = Field(None, description="Entry mid reference (VWAP or typical)")
     entry_band_beta: float = Field(default=0.0, description="Entry band adjustment")
+    entry_low: Optional[float] = Field(None, description="Lower bound of entry range", gt=0)
+    entry_high: Optional[float] = Field(None, description="Upper bound of entry range", gt=0)
+    entry_range_pct: Optional[float] = Field(None, description="Entry range size as percentage")
     
     # Stops
     stop_loss: Optional[float] = Field(None, description="Stop loss price", gt=0)
     take_profit: Optional[float] = Field(None, description="Take profit price", gt=0)
     atr_value: Optional[float] = Field(None, description="ATR value used")
+    sl_low: Optional[float] = Field(None, description="Lower bound of SL range", gt=0)
+    sl_high: Optional[float] = Field(None, description="Upper bound of SL range", gt=0)
+    tp_low: Optional[float] = Field(None, description="Lower bound of TP range", gt=0)
+    tp_high: Optional[float] = Field(None, description="Upper bound of TP range", gt=0)
+    sl_range_pct: Optional[float] = Field(None, description="SL range size as percentage")
+    tp_range_pct: Optional[float] = Field(None, description="TP range size as percentage")
     
     # Position sizing
     position_size: Optional[PositionSize] = Field(None, description="Position size calculation")
@@ -175,6 +184,9 @@ class DecisionEngine:
         decision.entry_price = entry_result.entry_price
         decision.entry_mid = entry_result.entry_mid
         decision.entry_band_beta = entry_result.beta
+        decision.entry_low = entry_result.entry_low
+        decision.entry_high = entry_result.entry_high
+        decision.entry_range_pct = entry_result.range_pct
         
         # Calculate TP/SL
         from app.service.tp_sl_engine import calculate_tp_sl
@@ -182,12 +194,19 @@ class DecisionEngine:
         tp_sl_result = calculate_tp_sl(
             df=df,
             entry_price=decision.entry_price,
-            signal_direction=current_signal
+            signal_direction=current_signal,
+            calculate_ranges=True
         )
         
         decision.stop_loss = tp_sl_result.stop_loss
         decision.take_profit = tp_sl_result.take_profit
         decision.atr_value = tp_sl_result.atr_value
+        decision.sl_low = tp_sl_result.sl_low
+        decision.sl_high = tp_sl_result.sl_high
+        decision.tp_low = tp_sl_result.tp_low
+        decision.tp_high = tp_sl_result.tp_high
+        decision.sl_range_pct = tp_sl_result.sl_range_pct
+        decision.tp_range_pct = tp_sl_result.tp_range_pct
         
         # Calculate position size
         position = calculate_position_size_fixed_risk(
@@ -301,6 +320,9 @@ class DecisionEngine:
             entry_price = entry_result.entry_price
             entry_mid = entry_result.entry_mid
             entry_beta = entry_result.beta
+            entry_low = entry_result.entry_low
+            entry_high = entry_result.entry_high
+            entry_range_pct = entry_result.range_pct
         except Exception as e:
             return {
                 'has_plan': False,
@@ -315,12 +337,19 @@ class DecisionEngine:
             tp_sl_result = calculate_tp_sl(
                 df=df,
                 entry_price=entry_price,
-                signal_direction=signal
+                signal_direction=signal,
+                calculate_ranges=True
             )
             
             stop_loss = tp_sl_result.stop_loss
             take_profit = tp_sl_result.take_profit
             atr_value = tp_sl_result.atr_value
+            sl_low = tp_sl_result.sl_low
+            sl_high = tp_sl_result.sl_high
+            tp_low = tp_sl_result.tp_low
+            tp_high = tp_sl_result.tp_high
+            sl_range_pct = tp_sl_result.sl_range_pct
+            tp_range_pct = tp_sl_result.tp_range_pct
         except Exception as e:
             return {
                 'has_plan': False,
@@ -361,9 +390,18 @@ class DecisionEngine:
             'entry_price': entry_price,
             'entry_mid': entry_mid,
             'entry_beta': entry_beta,
+            'entry_low': entry_low,
+            'entry_high': entry_high,
+            'entry_range_pct': entry_range_pct,
             'stop_loss': stop_loss,
             'take_profit': take_profit,
             'atr_value': atr_value,
+            'sl_low': sl_low,
+            'sl_high': sl_high,
+            'tp_low': tp_low,
+            'tp_high': tp_high,
+            'sl_range_pct': sl_range_pct,
+            'tp_range_pct': tp_range_pct,
             'position_size': {
                 'quantity': position.quantity,
                 'notional': position.notional_value,
