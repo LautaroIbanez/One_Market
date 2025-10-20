@@ -14,7 +14,8 @@ UTC_TZ = ZoneInfo("UTC")
 ARG_TZ = ZoneInfo("America/Argentina/Buenos_Aires")  # UTC-3
 
 # Default trading windows (in local time UTC-3)
-DEFAULT_WINDOW_A_START = time(9, 0)   # 09:00 local (12:00 UTC)
+# Ajuste solicitado: iniciar la ventana A a las 07:00
+DEFAULT_WINDOW_A_START = time(7, 0)   # 07:00 local (10:00 UTC)
 DEFAULT_WINDOW_A_END = time(12, 30)   # 12:30 local (15:30 UTC)
 DEFAULT_WINDOW_B_START = time(14, 0)  # 14:00 local (17:00 UTC)
 DEFAULT_WINDOW_B_END = time(17, 0)    # 17:00 local (20:00 UTC)

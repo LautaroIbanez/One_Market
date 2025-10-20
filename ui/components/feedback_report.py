@@ -229,24 +229,70 @@ def render_feedback_report():
     
     try:
         decisions = tracker.get_decision_history(days)
-        
+        outcomes = tracker.get_outcome_history(days)
+
         if decisions:
-            # Convert to DataFrame for display
-            decisions_data = []
-            for decision in decisions:
-                decisions_data.append({
-                    'Fecha': decision.decision_date.strftime('%Y-%m-%d'),
-                    'Ejecutar': '✅' if decision.should_execute else '⏸️',
-                    'Señal': '🟢 LONG' if decision.signal == 1 else '🔴 SHORT' if decision.signal == -1 else '⚪ FLAT',
-                    'Precio Entrada': f"${decision.entry_price:,.2f}" if decision.entry_price else 'N/A',
-                    'Stop Loss': f"${decision.stop_loss:,.2f}" if decision.stop_loss else 'N/A',
-                    'Take Profit': f"${decision.take_profit:,.2f}" if decision.take_profit else 'N/A',
-                    'Confianza': f"{decision.signal_strength:.1%}" if decision.signal_strength else 'N/A',
-                    'Razón Skip': decision.skip_reason or 'N/A'
+            # Convert decisions to DataFrame
+            decisions_rows = []
+            for d in decisions:
+                decisions_rows.append({
+                    'fecha': d.decision_date.date(),
+                    'ejecutar': '✅' if d.should_execute else '⏸️',
+                    'senal': '🟢 LONG' if d.signal == 1 else '🔴 SHORT' if d.signal == -1 else '⚪ FLAT',
+                    'precio_entrada': d.entry_price,
+                    'stop_loss': d.stop_loss,
+                    'take_profit': d.take_profit,
+                    'confianza': d.signal_strength if d.signal_strength is not None else None,
+                    'razon_skip': d.skip_reason or None
                 })
-            
-            df = pd.DataFrame(decisions_data)
-            st.dataframe(df, use_container_width=True)
+            decisions_df = pd.DataFrame(decisions_rows)
+
+            # Convert outcomes to DataFrame
+            outcome_rows = []
+            for o in outcomes:
+                outcome_rows.append({
+                    'fecha': o.decision_date.date(),
+                    'pnl': o.pnl,
+                    'pnl_pct': o.pnl_pct,
+                    'precio_ejecucion': o.execution_price,
+                    'precio_salida': o.exit_price,
+                    'motivo_cierre': o.exit_reason or (o.skip_reason if not o.was_executed else None)
+                })
+            outcomes_df = pd.DataFrame(outcome_rows) if outcome_rows else pd.DataFrame(columns=['fecha'])
+
+            # Merge by date (si hay varias del mismo día, se agrupan por última ocurrencia)
+            if not outcomes_df.empty:
+                # En caso de múltiples outcomes por día, tomar el último
+                outcomes_df = outcomes_df.sort_values('fecha').groupby('fecha').tail(1)
+            merged = decisions_df.merge(outcomes_df, on='fecha', how='left')
+
+            # Formatting columns safely
+            def fmt_money(v):
+                return f"${v:,.2f}" if pd.notna(v) else 'N/A'
+            def fmt_pct(v):
+                return f"{v:.2%}" if pd.notna(v) else 'N/A'
+            def fmt_conf(v):
+                return f"{v:.1%}" if pd.notna(v) else 'N/A'
+
+            display_df = pd.DataFrame({
+                'Fecha': merged['fecha'].astype(str),
+                'Ejecutar': merged['ejecutar'],
+                'Señal': merged['senal'],
+                'Precio Entrada': merged['precio_entrada'].apply(fmt_money),
+                'Stop Loss': merged['stop_loss'].apply(fmt_money),
+                'Take Profit': merged['take_profit'].apply(fmt_money),
+                'Confianza': merged['confianza'].apply(fmt_conf),
+                'P&L ($)': merged['pnl'].apply(fmt_money),
+                'P&L (%)': merged['pnl_pct'].apply(fmt_pct),
+                'Ejecución': merged['precio_ejecucion'].apply(fmt_money),
+                'Salida': merged['precio_salida'].apply(fmt_money),
+                'Motivo Cierre': merged['motivo_cierre'].fillna('N/A'),
+                'Razón Skip': merged['razon_skip'].fillna('N/A')
+            })
+
+            # Orden cronológico descendente
+            display_df = display_df.sort_values('Fecha', ascending=False)
+            st.dataframe(display_df, use_container_width=True)
             
         else:
             st.info("No hay decisiones en el período analizado")
