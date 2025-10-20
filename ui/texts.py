@@ -112,3 +112,4 @@ STATUS_MESSAGES = {
     "modo_live": "⚠️ Modo Live Trading - Se ejecutarán operaciones reales"
 }
 
+

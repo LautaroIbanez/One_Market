@@ -55,8 +55,9 @@ def simple_average(
     combined[avg_signal > threshold] = 1
     combined[avg_signal < -threshold] = -1
     
-    # Confidence is absolute value of average
-    confidence = abs(avg_signal) / len(signals)
+    # Confidence is absolute value of average, scaled to 0-1
+    # This represents the strength of consensus among strategies
+    confidence = abs(avg_signal)
     
     # Equal weights
     weights = {name: 1.0 / len(signals) for name in signals.keys()}

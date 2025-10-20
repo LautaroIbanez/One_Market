@@ -259,15 +259,20 @@ def render_price_chart(df: pd.DataFrame, decision, symbol: str, timeframe: str):
         name="Price"
     )])
     
-    if decision and decision.should_execute:
+    if decision:
+        # Determine if levels should be shown as hypothetical
+        is_hypothetical = not decision.should_execute
+        level_prefix = "Hipotético " if is_hypothetical else ""
+        
         # Entry price line
-        fig.add_hline(
-            y=decision.entry_price,
-            line_dash="dash",
-            line_color="blue",
-            annotation_text=f"Entry: ${decision.entry_price:,.2f}",
-            annotation_position="right"
-        )
+        if decision.entry_price:
+            fig.add_hline(
+                y=decision.entry_price,
+                line_dash="dash",
+                line_color="orange" if is_hypothetical else "blue",
+                annotation_text=f"{level_prefix}Entry: ${decision.entry_price:,.2f}",
+                annotation_position="right"
+            )
         
         # Stop loss line
         if decision.stop_loss:
@@ -275,7 +280,7 @@ def render_price_chart(df: pd.DataFrame, decision, symbol: str, timeframe: str):
                 y=decision.stop_loss,
                 line_dash="dot",
                 line_color="red",
-                annotation_text=f"SL: ${decision.stop_loss:,.2f}",
+                annotation_text=f"{level_prefix}SL: ${decision.stop_loss:,.2f}",
                 annotation_position="right"
             )
         
@@ -285,7 +290,7 @@ def render_price_chart(df: pd.DataFrame, decision, symbol: str, timeframe: str):
                 y=decision.take_profit,
                 line_dash="dot",
                 line_color="green",
-                annotation_text=f"TP: ${decision.take_profit:,.2f}",
+                annotation_text=f"{level_prefix}TP: ${decision.take_profit:,.2f}",
                 annotation_position="right"
             )
         
@@ -298,7 +303,7 @@ def render_price_chart(df: pd.DataFrame, decision, symbol: str, timeframe: str):
                 x1=chart_df['datetime'].iloc[-1],
                 y0=decision.entry_mid - spread,
                 y1=decision.entry_mid + spread,
-                fillcolor="lightblue",
+                fillcolor="orange" if is_hypothetical else "lightblue",
                 opacity=0.2,
                 line_width=0
             )
@@ -478,7 +483,18 @@ if df is not None and len(df) > 0:
             
             with col2:
                 confidence = float(combined.confidence.iloc[-1])
-                st.metric("Confianza Señal", f"{confidence:.0%}")
+                num_strategies = combined.metadata.get('num_strategies', 0)
+                
+                # Calculate strategies in favor/against
+                signal_value = int(combined.signal.iloc[-1])
+                if signal_value != 0:
+                    strategies_favor = int(confidence * num_strategies)
+                    strategies_against = num_strategies - strategies_favor
+                    tooltip = f"Estrategias a favor: {strategies_favor}/{num_strategies}"
+                else:
+                    tooltip = f"Total estrategias: {num_strategies}"
+                
+                st.metric("Confianza Señal", f"{confidence:.0%}", help=tooltip)
             
             with col3:
                 current_price = float(df['close'].iloc[-1])
@@ -488,7 +504,8 @@ if df is not None and len(df) > 0:
                 if decision and decision.should_execute:
                     st.metric("Estado", "✅ EJECUTAR")
                 else:
-                    st.metric("Estado", "⏸️ SKIP")
+                    skip_reason = getattr(decision, 'skip_reason', 'No especificado') if decision else 'Sin decisión'
+                    st.metric("Estado", "⏸️ SKIP", help=f"Razón: {skip_reason}")
             
             st.markdown("---")
             
@@ -579,6 +596,15 @@ if df is not None and len(df) > 0:
         # ============================================================
         
         with tab2:
+            st.markdown("---")
+            
+            # Import and render feedback report
+            try:
+                from ui.components.feedback_report import render_feedback_report
+                render_feedback_report()
+            except Exception as e:
+                st.error(f"Error al cargar reporte de retroalimentación: {e}")
+            
             st.markdown("---")
             
             # Multi-horizon analysis
