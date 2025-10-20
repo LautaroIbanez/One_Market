@@ -679,6 +679,139 @@ async def get_recommended_profile(capital: float):
 
 
 # ============================================================
+# DAILY BRIEFING (NEW v2.0)
+# ============================================================
+
+@app.post("/briefing/generate")
+async def generate_briefing(
+    symbol: str = "BTC/USDT",
+    timeframe: str = "1h",
+    strategies: Optional[List[str]] = None,
+    combination_method: str = "simple_average",
+    capital: float = 100000.0,
+    risk_pct: float = 0.02
+):
+    """Generate comprehensive daily trading briefing."""
+    try:
+        from app.service.daily_briefing import generate_daily_briefing
+        
+        # Load data
+        store = DataStore()
+        bars = store.read_bars(symbol, timeframe)
+        
+        if len(bars) < 100:
+            raise HTTPException(status_code=400, detail="Insufficient data")
+        
+        df = pd.DataFrame([bar.to_dict() for bar in bars])
+        df = df.sort_values('timestamp').reset_index(drop=True)
+        
+        # Generate briefing
+        briefing = generate_daily_briefing(
+            symbol=symbol,
+            timeframe=timeframe,
+            df=df,
+            strategies=strategies,
+            combination_method=combination_method,
+            capital=capital,
+            risk_pct=risk_pct
+        )
+        
+        return briefing.dict()
+    
+    except Exception as e:
+        logger.error(f"Error generating briefing: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/briefing/markdown")
+async def get_briefing_markdown(
+    symbol: str = "BTC/USDT",
+    timeframe: str = "1h",
+    strategies: Optional[List[str]] = None,
+    combination_method: str = "simple_average",
+    capital: float = 100000.0,
+    risk_pct: float = 0.02
+):
+    """Generate briefing and return as Markdown."""
+    try:
+        from app.service.daily_briefing import generate_daily_briefing, export_briefing_markdown
+        
+        # Load data
+        store = DataStore()
+        bars = store.read_bars(symbol, timeframe)
+        
+        if len(bars) < 100:
+            raise HTTPException(status_code=400, detail="Insufficient data")
+        
+        df = pd.DataFrame([bar.to_dict() for bar in bars])
+        df = df.sort_values('timestamp').reset_index(drop=True)
+        
+        # Generate briefing
+        briefing = generate_daily_briefing(
+            symbol=symbol,
+            timeframe=timeframe,
+            df=df,
+            strategies=strategies,
+            combination_method=combination_method,
+            capital=capital,
+            risk_pct=risk_pct
+        )
+        
+        # Export as markdown
+        markdown_content = export_briefing_markdown(briefing)
+        
+        return {
+            "markdown": markdown_content,
+            "briefing_date": briefing.briefing_date.isoformat(),
+            "symbol": briefing.symbol,
+            "should_execute": briefing.should_execute
+        }
+    
+    except Exception as e:
+        logger.error(f"Error generating briefing markdown: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/briefing/hypothetical")
+async def get_hypothetical_plan(
+    symbol: str = "BTC/USDT",
+    timeframe: str = "1h",
+    signal: int = 1,
+    capital: float = 100000.0,
+    risk_pct: float = 0.02
+):
+    """Calculate hypothetical trading plan for a given signal."""
+    try:
+        from app.service.decision import DecisionEngine
+        
+        # Load data
+        store = DataStore()
+        bars = store.read_bars(symbol, timeframe)
+        
+        if len(bars) < 100:
+            raise HTTPException(status_code=400, detail="Insufficient data")
+        
+        df = pd.DataFrame([bar.to_dict() for bar in bars])
+        df = df.sort_values('timestamp').reset_index(drop=True)
+        
+        # Calculate hypothetical plan
+        engine = DecisionEngine()
+        plan = engine.calculate_hypothetical_plan(
+            df=df,
+            signal=signal,
+            signal_strength=0.75,  # Default confidence
+            capital=capital,
+            risk_pct=risk_pct
+        )
+        
+        return plan
+    
+    except Exception as e:
+        logger.error(f"Error calculating hypothetical plan: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
 # STARTUP/SHUTDOWN
 # ============================================================
 

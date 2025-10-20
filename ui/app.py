@@ -452,6 +452,70 @@ if df is not None and len(df) > 0:
         with tab1:
             st.markdown("---")
             
+            # ============================================================
+            # DAILY BRIEFING CARD
+            # ============================================================
+            st.subheader("📋 Briefing Diario del Trade")
+            
+            try:
+                from app.service.daily_briefing import generate_daily_briefing
+                
+                with st.spinner("Generando briefing..."):
+                    briefing = generate_daily_briefing(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        df=df,
+                        strategies=['ma_crossover', 'rsi_regime_pullback', 'macd_histogram_atr_filter'],
+                        combination_method='simple_average',
+                        capital=capital,
+                        risk_pct=risk_pct
+                    )
+                
+                # Briefing metrics
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    status_icon = "✅" if briefing.should_execute else "⏸️"
+                    st.metric("Estado", f"{status_icon} {'EJECUTAR' if briefing.should_execute else 'SKIP'}")
+                
+                with col2:
+                    direction_icon = "🟢" if briefing.signal_direction == "LONG" else ("🔴" if briefing.signal_direction == "SHORT" else "⚪")
+                    st.metric("Dirección", f"{direction_icon} {briefing.signal_direction}")
+                
+                with col3:
+                    st.metric("Confianza", f"{briefing.signal_confidence:.1%}")
+                
+                with col4:
+                    vol_color = "🔴" if briefing.volatility_state == "extreme" else ("🟡" if briefing.volatility_state == "high" else "🟢")
+                    st.metric("Volatilidad", f"{vol_color} {briefing.volatility_state.upper()}")
+                
+                # Recommendation expandable
+                with st.expander("📝 Ver Recomendación Completa", expanded=False):
+                    st.markdown(briefing.recommendation)
+                
+                # Risk warning
+                if briefing.risk_warning:
+                    st.warning(briefing.risk_warning)
+                
+                # Download button
+                from app.service.daily_briefing import export_briefing_markdown
+                markdown_text = export_briefing_markdown(briefing)
+                
+                st.download_button(
+                    label="📥 Descargar Briefing (Markdown)",
+                    data=markdown_text,
+                    file_name=f"briefing_{symbol.replace('/', '-')}_{briefing.briefing_date.strftime('%Y%m%d')}.md",
+                    mime="text/markdown",
+                    key="download_briefing"
+                )
+            
+            except Exception as e:
+                st.error(f"❌ Error generando briefing: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
+            
+            st.markdown("---")
+            
             # Confidence indicator banner
             st.subheader("📈 Confianza del Sistema")
             col1, col2, col3 = st.columns([1, 2, 3])
@@ -575,14 +639,69 @@ if df is not None and len(df) > 0:
                         st.info("💾 **Plan guardado!** Disponible en historial.")
             
             else:
-                # No trade today
+                # No trade today - Show hypothetical plan
+                st.subheader("🔮 Escenario Alternativo (Hipotético)")
+                
                 if decision and decision.skip_reason:
+                    # Show skip reason with explanation
                     if "trading hours" in decision.skip_reason.lower():
-                        st.info("⏰ **Fuera de horario de trading.** Ventanas: 09:00-12:30 y 14:00-17:00 (UTC-3).")
+                        st.warning(f"⏰ **Operación Bloqueada:** {decision.skip_reason}")
+                        st.info("💡 **Explicación:** Las operaciones solo se ejecutan durante ventanas A (09:00-12:30) y B (14:00-17:00) UTC-3.")
                     else:
-                        st.info(f"ℹ️ **No hay trade hoy:** {decision.skip_reason}")
+                        st.warning(f"⏸️ **Operación Bloqueada:** {decision.skip_reason}")
                 else:
                     st.info("⏸️ **No hay trade hoy.** Esperando mejores condiciones.")
+                
+                # Calculate and show hypothetical plan
+                signal_value = int(combined.signal.iloc[-1])
+                
+                if signal_value != 0 and decision:
+                    from app.service.decision import DecisionEngine
+                    
+                    st.markdown("---")
+                    st.markdown("### 📋 Plan que se ejecutaría (si condiciones fueran favorables)")
+                    
+                    try:
+                        engine = DecisionEngine()
+                        hypo_plan = engine.calculate_hypothetical_plan(
+                            df=df,
+                            signal=signal_value,
+                            signal_strength=float(combined.confidence.iloc[-1]),
+                            capital=capital,
+                            risk_pct=risk_pct
+                        )
+                        
+                        if hypo_plan.get('has_plan'):
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                st.markdown("**📍 Entrada Hipotética**")
+                                st.metric("Precio de Entrada", f"${hypo_plan['entry_price']:,.2f}", 
+                                         delta=f"{hypo_plan['distance_to_entry_pct']:.2f}% del precio actual")
+                                st.metric("Dirección", hypo_plan['side'])
+                                st.metric("Confianza", f"{hypo_plan['signal_strength']:.1%}")
+                            
+                            with col2:
+                                st.markdown("**🛡️ Niveles de Riesgo**")
+                                st.metric("Stop Loss", f"${hypo_plan['stop_loss']:,.2f}")
+                                st.metric("Take Profit", f"${hypo_plan['take_profit']:,.2f}")
+                                st.metric("R/R Ratio", f"{hypo_plan['risk_reward_ratio']:.2f}")
+                            
+                            st.markdown("**💼 Posición Propuesta**")
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Cantidad", f"{hypo_plan['position_size']['quantity']:.4f}")
+                            with col2:
+                                st.metric("Valor", f"${hypo_plan['position_size']['notional']:,.2f}")
+                            with col3:
+                                st.metric("Riesgo", f"${hypo_plan['position_size']['risk_amount']:,.2f}")
+                            
+                            st.info("ℹ️ **Nota:** Este es un plan hipotético. No se ejecutará automáticamente. Puedes usarlo como referencia para trading manual.")
+                        else:
+                            st.warning(f"⚠️ No se pudo calcular plan hipotético: {hypo_plan.get('reason', 'Unknown')}")
+                    
+                    except Exception as e:
+                        st.error(f"❌ Error calculando plan hipotético: {str(e)}")
             
             st.markdown("---")
             

@@ -251,4 +251,128 @@ class DecisionEngine:
         )
         
         return combined.signal, combined.confidence
+    
+    def calculate_hypothetical_plan(
+        self,
+        df: pd.DataFrame,
+        signal: int,
+        signal_strength: float = 0.0,
+        capital: float = 100000.0,
+        risk_pct: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """Calculate hypothetical trading plan without executing.
+        
+        This calculates what would be the entry/SL/TP levels if we were to trade,
+        useful for showing "what if" scenarios when decision is SKIP.
+        
+        Args:
+            df: DataFrame with OHLCV data
+            signal: Signal value (1=long, -1=short, 0=flat)
+            signal_strength: Signal confidence/strength
+            capital: Available capital
+            risk_pct: Risk percentage (uses default if None)
+            
+        Returns:
+            Dictionary with entry_price, stop_loss, take_profit, position_size, etc.
+        """
+        if risk_pct is None:
+            risk_pct = self.default_risk_pct
+        
+        current_price = float(df['close'].iloc[-1])
+        
+        # No plan for flat signal
+        if signal == 0:
+            return {
+                'has_plan': False,
+                'signal': signal,
+                'reason': 'No directional signal'
+            }
+        
+        # Calculate entry levels
+        from app.service.entry_band import calculate_entry_band
+        
+        try:
+            entry_result = calculate_entry_band(
+                df,
+                current_price,
+                signal_direction=signal
+            )
+            
+            entry_price = entry_result.entry_price
+            entry_mid = entry_result.entry_mid
+            entry_beta = entry_result.beta
+        except Exception as e:
+            return {
+                'has_plan': False,
+                'signal': signal,
+                'reason': f'Entry calculation failed: {str(e)}'
+            }
+        
+        # Calculate TP/SL
+        from app.service.tp_sl_engine import calculate_tp_sl
+        
+        try:
+            tp_sl_result = calculate_tp_sl(
+                df=df,
+                entry_price=entry_price,
+                signal_direction=signal
+            )
+            
+            stop_loss = tp_sl_result.stop_loss
+            take_profit = tp_sl_result.take_profit
+            atr_value = tp_sl_result.atr_value
+        except Exception as e:
+            return {
+                'has_plan': False,
+                'signal': signal,
+                'reason': f'TP/SL calculation failed: {str(e)}'
+            }
+        
+        # Calculate position size
+        try:
+            position = calculate_position_size_fixed_risk(
+                capital=capital,
+                risk_pct=risk_pct,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                leverage=1.0
+            )
+        except Exception as e:
+            return {
+                'has_plan': False,
+                'signal': signal,
+                'reason': f'Position sizing failed: {str(e)}'
+            }
+        
+        # Calculate risk/reward
+        if signal > 0:  # Long
+            risk_per_unit = entry_price - stop_loss
+            reward_per_unit = take_profit - entry_price
+        else:  # Short
+            risk_per_unit = stop_loss - entry_price
+            reward_per_unit = entry_price - take_profit
+        
+        rr_ratio = reward_per_unit / risk_per_unit if risk_per_unit > 0 else 0
+        
+        return {
+            'has_plan': True,
+            'signal': signal,
+            'signal_strength': signal_strength,
+            'entry_price': entry_price,
+            'entry_mid': entry_mid,
+            'entry_beta': entry_beta,
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'atr_value': atr_value,
+            'position_size': {
+                'quantity': position.quantity,
+                'notional': position.notional_value,
+                'risk_amount': position.risk_amount,
+                'risk_pct': position.risk_pct
+            },
+            'risk_reward_ratio': rr_ratio,
+            'current_price': current_price,
+            'side': 'LONG' if signal > 0 else 'SHORT',
+            'distance_to_entry_pct': abs(current_price - entry_price) / current_price * 100
+        }
 
