@@ -168,7 +168,7 @@ class StrategyOrchestrator:
         symbol: str,
         timeframes: List[str],
         end_date: Optional[datetime] = None,
-        min_bars: int = 100
+        min_bars: Optional[int] = None
     ) -> Dict[str, DataValidationStatus]:
         """Validate data availability for multiple timeframes.
         
@@ -176,18 +176,26 @@ class StrategyOrchestrator:
             symbol: Trading symbol
             timeframes: List of timeframes to validate
             end_date: End date for validation (default: now)
-            min_bars: Minimum number of bars required
+            min_bars: Minimum number of bars required (None = use settings default)
             
         Returns:
             Dictionary mapping timeframe to validation status
         """
+        from app.config.settings import settings
+        
         if end_date is None:
             end_date = datetime.now()
+        
+        if min_bars is None:
+            min_bars = settings.MIN_BARS_FOR_BACKTEST
         
         validation_results = {}
         
         for timeframe in timeframes:
             try:
+                # Get target bars for this timeframe
+                target_bars = settings.TIMEFRAME_CANDLE_TARGETS.get(timeframe, min_bars)
+                
                 # Try to load data
                 df = self._load_data(symbol, timeframe, end_date)
                 
@@ -374,23 +382,48 @@ class StrategyOrchestrator:
                     initial_capital=self.capital,
                     risk_per_trade=self.max_risk_pct,
                     commission=0.001,
-                    slippage=0.0005
+                    slippage=0.0005,
+                    # Disable trading windows for daily timeframes
+                    use_trading_windows=(timeframe not in ['1d', '1w', '1M'])
                 )
                 
                 engine = BacktestEngine(config)
-                trades = engine.run(df, signal_output.signal, combo_name, verbose=False)
+                backtest_result = engine.run(df, signal_output.signal, combo_name, verbose=False)
                 
-                if not trades:
+                if not backtest_result or backtest_result.total_trades == 0:
                     continue
                 
-                # Calculate metrics from trades
-                metrics = self._calculate_metrics_from_trades(trades)
-                
+                # Create StrategyBacktestResult from BacktestResult
                 result = StrategyBacktestResult(
                     strategy_name=combo_name,
                     timestamp=end_date,
                     timeframe=timeframe,
-                    **metrics
+                    
+                    # Performance (from BacktestResult)
+                    total_return=backtest_result.total_return,
+                    cagr=backtest_result.cagr,
+                    sharpe_ratio=backtest_result.sharpe_ratio,
+                    max_drawdown=backtest_result.max_drawdown,
+                    win_rate=backtest_result.win_rate,
+                    profit_factor=backtest_result.profit_factor,
+                    expectancy=backtest_result.expectancy,
+                    
+                    # Risk (from BacktestResult)
+                    volatility=backtest_result.volatility,
+                    calmar_ratio=backtest_result.calmar_ratio,
+                    sortino_ratio=backtest_result.sortino_ratio,
+                    
+                    # Trade stats (from BacktestResult)
+                    total_trades=backtest_result.total_trades,
+                    winning_trades=backtest_result.winning_trades,
+                    losing_trades=backtest_result.losing_trades,
+                    avg_win=backtest_result.avg_win,
+                    avg_loss=backtest_result.avg_loss,
+                    
+                    # Config
+                    capital=self.capital,
+                    risk_pct=self.max_risk_pct,
+                    lookback_days=self.lookback_days
                 )
                 
                 results.append(result)
@@ -406,7 +439,7 @@ class StrategyOrchestrator:
         self,
         symbol: str,
         timeframe: str,
-        end_date: datetime
+        end_date: Optional[datetime] = None
     ) -> Optional[pd.DataFrame]:
         """Load historical data for backtesting with homogeneous candle counts."""
         try:
@@ -423,11 +456,10 @@ class StrategyOrchestrator:
             df = pd.DataFrame([bar.to_dict() for bar in bars])
             df = df.sort_values('timestamp').reset_index(drop=True)
             
-            # Filter by date range (if needed)
-            end_timestamp = int(end_date.timestamp() * 1000)
-            start_timestamp = int((end_date - timedelta(days=self.lookback_days)).timestamp() * 1000)
-            
-            df = df[(df['timestamp'] >= start_timestamp) & (df['timestamp'] <= end_timestamp)]
+            # Only filter by end_date if provided, otherwise use all available data
+            if end_date:
+                end_timestamp = int(end_date.timestamp() * 1000)
+                df = df[df['timestamp'] <= end_timestamp]
             
             return df if len(df) > 0 else None
             
@@ -454,7 +486,9 @@ class StrategyOrchestrator:
                 initial_capital=self.capital,
                 risk_per_trade=self.max_risk_pct,
                 commission=0.001,
-                slippage=0.0005
+                slippage=0.0005,
+                # Disable trading windows for daily timeframes
+                use_trading_windows=(timeframe not in ['1d', '1w', '1M'])
             )
             
             engine = BacktestEngine(config)

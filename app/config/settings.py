@@ -52,18 +52,17 @@ class Settings(BaseSettings):
             "1m": 1440,     # ~1 day (minimum for intraday)
             "15m": 672,     # ~1 week (96 per day * 7)
             "1h": 720,      # ~30 days (24 per day * 30)
-            "4h": 180,      # ~30 days (6 per day * 30)
-            "12h": 60,      # ~30 days (2 per day * 30)
-            "1d": 365,      # ~1 year
+            "4h": 360,      # ~60 days (6 per day * 60) - INCREASED for better data
+            "1d": 730,      # ~2 years - INCREASED for better data
             "1w": 104,      # ~2 years (52 per year * 2)
             "1M": 36,       # ~3 years (12 per year * 3)
         },
         description="Target number of candles per timeframe for homogeneous comparison (realistic minimums)"
     )
     
-    # Target timeframes for multi-timeframe analysis (removed 5m)
+    # Target timeframes for multi-timeframe analysis (removed 5m and 12h)
     TARGET_TIMEFRAMES: List[str] = Field(
-        default=["1d", "12h", "4h", "1h", "15m"],
+        default=["1d", "4h", "1h", "15m"],
         description="Timeframes to analyze in multi-timeframe mode"
     )
     

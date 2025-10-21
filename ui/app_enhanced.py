@@ -60,24 +60,54 @@ def load_ohlcv_data(symbol: str, timeframe: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=600)
-def get_best_strategy_recommendation(symbol: str, timeframe: str, capital: float):
-    """Get best strategy recommendation for today."""
+def get_best_strategy_recommendation(symbol: str, capital: float):
+    """Get best strategy recommendation based on multi-timeframe ranking."""
     try:
-        # Try the complex service first
-        service = StrategyRankingService(capital=capital, max_risk_pct=0.02, lookback_days=90)
-        recommendation = service.get_daily_recommendation(
-            symbol=symbol,
-            timeframe=timeframe,
-            capital=capital,
-            ranking_method="composite"
-        )
+        from app.service.daily_recommendation import DailyRecommendationService
+        
+        # Use the new comprehensive recommendation service
+        service = DailyRecommendationService(capital=capital, max_risk_pct=0.02)
+        recommendation = service.get_daily_recommendation(symbol, include_combinations=True)
+        
         if recommendation:
             return recommendation
+        else:
+            st.warning("⚠️ No se pudo generar recomendación multi-timeframe")
+            return None
+            
     except Exception as e:
-        st.warning(f"⚠️ Sistema automático no disponible: {e}")
+        st.error(f"❌ Error en servicio de recomendación: {e}")
+        st.info("🔄 Usando recomendación simplificada...")
+        # Fallback to simple recommendation
+        return create_simple_recommendation(symbol, capital)
+
+
+def create_simple_recommendation(symbol: str, capital: float):
+    """Create a simple recommendation when full system fails."""
+    from app.service.daily_recommendation import DailyRecommendation
     
-    # Always use fallback for now
-    return create_fallback_recommendation(symbol, timeframe, capital)
+    return DailyRecommendation(
+        date=datetime.now().strftime('%Y-%m-%d'),
+        symbol=symbol,
+        recommended_strategy="MA Crossover (Fallback)",
+        recommended_timeframe="1h",
+        is_combination=False,
+        global_score=0.5,
+        global_rank=1,
+        confidence_level="LOW",
+        expected_sharpe=1.0,
+        expected_win_rate=0.55,
+        expected_cagr=0.08,
+        expected_max_dd=-0.10,
+        expected_profit_factor=1.2,
+        expected_expectancy=20.0,
+        sharpe_consistency=0.5,
+        cross_timeframe_agreement=0.0,
+        signal_direction=0,
+        alternatives=[],
+        reasoning="Recomendación de fallback - sistema completo no disponible",
+        warnings=["Sistema multi-timeframe no disponible", "Usar con precaución"]
+    )
 
 
 def create_fallback_recommendation(symbol: str, timeframe: str, capital: float):
@@ -319,15 +349,24 @@ def compare_multi_timeframe_strategies(symbol: str, capital: float):
         if ranked_strategies:
             global_df = pd.DataFrame([{
                 'Strategy': s.strategy_name,
+                'Sharpe': s.best_sharpe,
+                'Sortino': 0.0,  # Not available in global ranking
+                'Calmar': 0.0,   # Not available in global ranking
+                'CAGR': s.best_cagr,
+                'Win Rate': s.best_win_rate,
+                'Max DD': s.worst_max_dd,
+                'Profit Factor': s.best_profit_factor,
+                'Expectancy': s.best_expectancy,
+                'Volatility': 0.0,  # Not available in global ranking
+                'Total Trades': 0,   # Not available in global ranking
+                'Wins': 0,          # Not available in global ranking
+                'Losses': 0,       # Not available in global ranking
+                'Avg Win': 0.0,    # Not available in global ranking
+                'Avg Loss': 0.0,   # Not available in global ranking
+                'Timeframe': 'Multi',
                 'Type': 'Combination' if s.is_combination else 'Individual',
                 'Global Score': s.global_score,
                 'Global Rank': s.global_rank,
-                'Best Sharpe': s.best_sharpe,
-                'Best Win Rate': s.best_win_rate,
-                'Best CAGR': s.best_cagr,
-                'Best Profit Factor': s.best_profit_factor,
-                'Best Expectancy': s.best_expectancy,
-                'Worst Max DD': s.worst_max_dd,
                 'Sharpe Consistency': s.sharpe_consistency,
                 'Win Rate Consistency': s.win_rate_consistency,
                 'CAGR Consistency': s.cagr_consistency
@@ -898,35 +937,81 @@ with tab1:
     st.markdown("---")
     st.header("🏆 Best Strategy for Today")
     
-    # Get recommendation
-    recommendation = get_best_strategy_recommendation(symbol, timeframe, capital)
+    # Get recommendation (now multi-timeframe based)
+    recommendation = get_best_strategy_recommendation(symbol, capital)
     
     if recommendation:
         # Display best strategy
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.metric("🥇 Mejor Estrategia", recommendation.best_strategy_name)
-            st.metric("Score", f"{recommendation.composite_score:.1f}/100")
+            st.metric("🥇 Mejor Estrategia", recommendation.recommended_strategy)
+            st.metric("Score Global", f"{recommendation.global_score:.2f}")
+            st.metric("Rank", f"#{recommendation.global_rank}")
         
         with col2:
-            st.metric("Sharpe Ratio", f"{recommendation.sharpe_ratio:.2f}")
-            st.metric("Win Rate", f"{recommendation.win_rate:.1%}")
+            st.metric("Timeframe Óptimo", recommendation.recommended_timeframe)
+            st.metric("Sharpe Esperado", f"{recommendation.expected_sharpe:.2f}")
+            st.metric("Win Rate Esperado", f"{recommendation.expected_win_rate:.1%}")
         
         with col3:
-            st.metric("Max Drawdown", f"{abs(recommendation.max_drawdown):.1%}")
-            st.metric("Expectancy", f"${recommendation.expectancy:.2f}")
+            st.metric("CAGR Esperado", f"{recommendation.expected_cagr:.1%}")
+            st.metric("Max DD Esperado", f"{abs(recommendation.expected_max_dd):.1%}")
+            st.metric("Expectancy", f"${recommendation.expected_expectancy:.2f}")
+        
+        # Tipo de estrategia
+        if recommendation.is_combination:
+            st.info("🔗 Esta es una combinación de estrategias")
+        else:
+            st.info("📊 Esta es una estrategia individual")
         
         # Confidence indicator
         st.markdown("---")
-        st.subheader("📊 Nivel de Confianza")
+        st.subheader("📊 Nivel de Confianza y Consistencia")
         
-        if recommendation.confidence_level == "HIGH":
-            st.success(f"🟢 {recommendation.confidence_description}")
-        elif recommendation.confidence_level == "MEDIUM":
-            st.warning(f"🟡 {recommendation.confidence_description}")
-        else:
-            st.error(f"🔴 {recommendation.confidence_description}")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if recommendation.confidence_level == "HIGH":
+                st.success(f"🟢 Confianza: {recommendation.confidence_level}")
+            elif recommendation.confidence_level == "MEDIUM":
+                st.warning(f"🟡 Confianza: {recommendation.confidence_level}")
+            else:
+                st.error(f"🔴 Confianza: {recommendation.confidence_level}")
+        
+        with col2:
+            st.metric("Consistencia Sharpe", f"{recommendation.sharpe_consistency:.2f}")
+        
+        with col3:
+            st.metric("Acuerdo entre TFs", f"{recommendation.cross_timeframe_agreement:.1%}")
+        
+        # Reasoning
+        st.markdown("---")
+        st.subheader("💡 Razonamiento")
+        st.info(recommendation.reasoning)
+        
+        # Warnings
+        if recommendation.warnings:
+            st.markdown("---")
+            st.subheader("⚠️ Advertencias")
+            for warning in recommendation.warnings:
+                st.warning(warning)
+        
+        # Alternatives
+        if recommendation.alternatives:
+            st.markdown("---")
+            st.subheader("🔄 Estrategias Alternativas (Top 3)")
+            
+            for alt in recommendation.alternatives:
+                with st.expander(f"#{alt['rank']}: {alt['name']} (Score: {alt['score']:.2f})"):
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Sharpe", f"{alt['sharpe']:.2f}")
+                    with col2:
+                        st.metric("Win Rate", f"{alt['win_rate']:.1%}")
+                    with col3:
+                        combo_badge = "🔗 Combinación" if alt['is_combination'] else "📊 Individual"
+                        st.metric("Tipo", combo_badge)
         
         # Trade plan
         st.markdown("---")
@@ -953,11 +1038,11 @@ with tab1:
                 rr = reward / risk if risk > 0 else 0
                 st.metric("R/R Ratio", f"{rr:.2f}")
         
-        # Add price chart with levels
+        # Add price chart with levels (using recommended timeframe)
         st.markdown("---")
-        st.subheader("📈 Gráfico de Precios con Niveles de Trading")
+        st.subheader(f"📈 Gráfico de Precios con Niveles de Trading ({recommendation.recommended_timeframe})")
         
-        price_chart = create_price_chart_with_levels(symbol, timeframe, recommendation)
+        price_chart = create_price_chart_with_levels(symbol, recommendation.recommended_timeframe, recommendation)
         if price_chart:
             st.plotly_chart(price_chart, use_container_width=True)
         else:
@@ -992,7 +1077,46 @@ with tab2:
                 st.rerun()
     
     if analysis_mode == "Single Timeframe":
-        comparison_df = compare_all_strategies(symbol, timeframe, capital)
+        # Add strategy selection option
+        st.subheader("⚙️ Configuración de Análisis")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            analysis_type = st.radio(
+                "Tipo de Análisis",
+                ["Todas las Estrategias", "Estrategias Seleccionadas", "Variaciones Paramétricas"],
+                horizontal=False
+            )
+        
+        with col2:
+            if analysis_type == "Estrategias Seleccionadas":
+                from app.service.strategy_orchestrator import StrategyOrchestrator
+                orchestrator = StrategyOrchestrator(capital=capital, max_risk_pct=0.02, lookback_days=90)
+                available_strategies = [s.name for s in orchestrator.STRATEGY_REGISTRY if s.enabled]
+                selected_strategies = st.multiselect(
+                    "Seleccionar Estrategias",
+                    available_strategies,
+                    default=available_strategies[:3]
+                )
+            elif analysis_type == "Variaciones Paramétricas":
+                st.info("Configurar variaciones de parámetros (ej: MA periodos 10-50)")
+        
+        # Execute analysis based on selection
+        if analysis_type == "Todas las Estrategias":
+            comparison_df = compare_all_strategies(symbol, timeframe, capital)
+        elif analysis_type == "Estrategias Seleccionadas":
+            if selected_strategies:
+                st.info(f"🔄 Analizando {len(selected_strategies)} estrategias seleccionadas...")
+                comparison_df = compare_all_strategies(symbol, timeframe, capital)
+                # Filter to selected strategies
+                comparison_df = comparison_df[comparison_df['Strategy'].isin(selected_strategies)]
+            else:
+                st.warning("⚠️ Selecciona al menos una estrategia")
+                comparison_df = pd.DataFrame()
+        else:  # Variaciones Paramétricas
+            st.info("🔄 Funcionalidad de variaciones paramétricas en desarrollo...")
+            comparison_df = compare_all_strategies(symbol, timeframe, capital)
     else:
         # Multi-timeframe analysis
         st.info("🔄 Ejecutando análisis multi-timeframe...")
@@ -1014,12 +1138,12 @@ with tab2:
                 with col1:
                     st.subheader("📊 Top Estrategias Individuales")
                     individual = global_df[global_df['Type'] == 'Individual'].head(5)
-                    st.dataframe(individual[['Strategy', 'Global Score', 'Best Sharpe', 'Best Win Rate']], use_container_width=True)
+                    st.dataframe(individual[['Strategy', 'Global Score', 'Sharpe', 'Win Rate']], use_container_width=True)
                 
                 with col2:
                     st.subheader("🔗 Top Combinaciones")
                     combinations = global_df[global_df['Type'] == 'Combination'].head(5)
-                    st.dataframe(combinations[['Strategy', 'Global Score', 'Best Sharpe', 'Best Win Rate']], use_container_width=True)
+                    st.dataframe(combinations[['Strategy', 'Global Score', 'Sharpe', 'Win Rate']], use_container_width=True)
             
             # Show asset metrics for context
             st.subheader("📈 Métricas del Activo")
@@ -1057,40 +1181,69 @@ with tab2:
                     mime="text/csv"
                 )
             
-            comparison_df = multi_results.get('Global', pd.DataFrame())  # Use global ranking as main comparison
+            # Use the first available timeframe results as main comparison
+            comparison_df = pd.DataFrame()
+            for tf, df in multi_results.items():
+                if tf != 'Global' and not df.empty:
+                    comparison_df = df
+                    break
         else:
             st.warning("⚠️ No se pudieron obtener resultados multi-timeframe")
             comparison_df = compare_all_strategies(symbol, timeframe, capital)
     
-    if not comparison_df.empty:
-        # Summary metrics
-        st.subheader("🎯 Resumen General")
+    if not comparison_df.empty and 'Strategy' in comparison_df.columns:
+        # Verify required columns exist
+        required_columns = ['Sharpe', 'Win Rate', 'Max DD', 'Profit Factor']
+        missing_columns = [col for col in required_columns if col not in comparison_df.columns]
         
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            best_sharpe = comparison_df['Sharpe'].max()
-            best_strat_sharpe = comparison_df.loc[comparison_df['Sharpe'].idxmax(), 'Strategy']
-            st.metric("Mejor Sharpe", f"{best_sharpe:.2f}")
-            st.caption(f"📌 {best_strat_sharpe}")
-        
-        with col2:
-            best_wr = comparison_df['Win Rate'].max()
-            best_strat_wr = comparison_df.loc[comparison_df['Win Rate'].idxmax(), 'Strategy']
-            st.metric("Mejor Win Rate", f"{best_wr:.1%}")
-            st.caption(f"📌 {best_strat_wr}")
-        
-        with col3:
-            best_dd = comparison_df['Max DD'].max()  # Closest to 0
-            best_strat_dd = comparison_df.loc[comparison_df['Max DD'].idxmax(), 'Strategy']
-            st.metric("Menor Drawdown", f"{abs(best_dd):.1%}")
-            st.caption(f"📌 {best_strat_dd}")
-        
-        with col4:
-            best_pf = comparison_df['Profit Factor'].max()
-            best_strat_pf = comparison_df.loc[comparison_df['Profit Factor'].idxmax(), 'Strategy']
-            st.metric("Mejor PF", f"{best_pf:.2f}")
-            st.caption(f"📌 {best_strat_pf}")
+        if missing_columns:
+            st.error(f"❌ Columnas faltantes en resultados: {', '.join(missing_columns)}")
+            st.info("🔄 Esto puede indicar un problema con los backtests. Revisa los logs.")
+        else:
+            # Summary metrics
+            st.subheader("🎯 Resumen General")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                try:
+                    best_sharpe = comparison_df['Sharpe'].max()
+                    best_strat_sharpe = comparison_df.loc[comparison_df['Sharpe'].idxmax(), 'Strategy']
+                    st.metric("Mejor Sharpe", f"{best_sharpe:.2f}")
+                    st.caption(f"📌 {best_strat_sharpe}")
+                except Exception as e:
+                    st.metric("Mejor Sharpe", "N/A")
+                    st.caption(f"⚠️ Error: {str(e)[:30]}")
+            
+            with col2:
+                try:
+                    best_wr = comparison_df['Win Rate'].max()
+                    best_strat_wr = comparison_df.loc[comparison_df['Win Rate'].idxmax(), 'Strategy']
+                    st.metric("Mejor Win Rate", f"{best_wr:.1%}")
+                    st.caption(f"📌 {best_strat_wr}")
+                except Exception as e:
+                    st.metric("Mejor Win Rate", "N/A")
+                    st.caption(f"⚠️ Error: {str(e)[:30]}")
+            
+            with col3:
+                try:
+                    best_dd = comparison_df['Max DD'].max()  # Closest to 0
+                    best_strat_dd = comparison_df.loc[comparison_df['Max DD'].idxmax(), 'Strategy']
+                    st.metric("Menor Drawdown", f"{abs(best_dd):.1%}")
+                    st.caption(f"📌 {best_strat_dd}")
+                except Exception as e:
+                    st.metric("Menor Drawdown", "N/A")
+                    st.caption(f"⚠️ Error: {str(e)[:30]}")
+            
+            with col4:
+                try:
+                    best_pf = comparison_df['Profit Factor'].max()
+                    best_strat_pf = comparison_df.loc[comparison_df['Profit Factor'].idxmax(), 'Strategy']
+                    st.metric("Mejor PF", f"{best_pf:.2f}")
+                    st.caption(f"📌 {best_strat_pf}")
+                except Exception as e:
+                    st.metric("Mejor PF", "N/A")
+                    st.caption(f"⚠️ Error: {str(e)[:30]}")
         
         st.markdown("---")
         
