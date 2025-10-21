@@ -14,6 +14,11 @@ from app.data.store import DataStore
 from app.data.fetch import DataFetcher
 from app.data.schema import FetchRequest
 
+# Include new data API routes
+from app.api.routes.data import router as data_router
+from app.api.routes.backtest import router as backtest_router
+from app.api.routes.recommendation import router as recommendation_router
+
 # Service
 from app.service import DecisionEngine, MarketAdvisor, PaperTradingDB
 from app.service.tp_sl_engine import TPSLConfig
@@ -45,6 +50,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include new data API routes
+app.include_router(data_router)
+app.include_router(backtest_router)
+app.include_router(recommendation_router)
 
 
 # ============================================================

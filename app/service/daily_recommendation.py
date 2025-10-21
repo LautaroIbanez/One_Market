@@ -1,389 +1,499 @@
-"""Daily recommendation service based on multi-timeframe ranking.
+"""Daily recommendation service for One Market platform.
 
-This module provides a comprehensive daily recommendation system that:
-- Analyzes strategies across multiple timeframes
-- Evaluates individual strategies and combinations
-- Generates a confidence-weighted recommendation
-- Provides detailed reasoning and metrics
+This module provides the core recommendation logic that analyzes
+multi-timeframe signals and generates actionable trading recommendations.
 """
+import hashlib
+import json
+import sqlite3
+from datetime import datetime, timezone, timedelta
+from typing import Optional, List, Dict, Any, Tuple
 import pandas as pd
 import numpy as np
-from typing import Optional, Dict, List, Tuple
-from datetime import datetime
-from pydantic import BaseModel, Field
 import logging
 
-from app.service.strategy_orchestrator import StrategyOrchestrator, StrategyBacktestResult
-from app.service.global_ranking import GlobalRankingService, RankedStrategy
+from app.data import DataStore, DataFetcher
+from app.research.signals import generate_signal, get_strategy_list
+from app.service.recommendation_contract import Recommendation, PlanDirection, RecommendationRequest, RecommendationResponse
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 
-class DailyRecommendation(BaseModel):
-    """Daily trading recommendation."""
-    
-    date: str
-    symbol: str
-    
-    # Best strategy recommendation
-    recommended_strategy: str
-    recommended_timeframe: str
-    is_combination: bool = False
-    
-    # Confidence metrics
-    global_score: float
-    global_rank: int
-    confidence_level: str  # LOW, MEDIUM, HIGH
-    
-    # Performance metrics
-    expected_sharpe: float
-    expected_win_rate: float
-    expected_cagr: float
-    expected_max_dd: float
-    expected_profit_factor: float
-    expected_expectancy: float
-    
-    # Consistency metrics
-    sharpe_consistency: float
-    cross_timeframe_agreement: float  # How many timeframes agree this is top 3
-    
-    # Signal details
-    signal_direction: int  # 1, -1, 0
-    entry_price: Optional[float] = None
-    stop_loss: Optional[float] = None
-    take_profit: Optional[float] = None
-    quantity: Optional[float] = None
-    risk_amount: Optional[float] = None
-    
-    # Alternative strategies (top 3)
-    alternatives: List[Dict] = Field(default_factory=list)
-    
-    # Reasoning
-    reasoning: str
-    warnings: List[str] = Field(default_factory=list)
-
-
 class DailyRecommendationService:
-    """Service for generating daily recommendations."""
+    """Service for generating daily trading recommendations."""
     
-    def __init__(self, capital: float, max_risk_pct: float = 0.02):
+    def __init__(self, capital: float = 10000.0, max_risk_pct: float = 2.0):
         """Initialize recommendation service.
         
         Args:
-            capital: Trading capital
-            max_risk_pct: Maximum risk per trade
+            capital: Available capital
+            max_risk_pct: Maximum risk percentage per trade
         """
         self.capital = capital
         self.max_risk_pct = max_risk_pct
-        self.orchestrator = StrategyOrchestrator(
-            capital=capital,
-            max_risk_pct=max_risk_pct,
-            lookback_days=90
-        )
-        self.ranking_service = GlobalRankingService()
+        self.store = DataStore()
+        self.fetcher = DataFetcher()
+        
+        # Initialize recommendation database
+        self._init_recommendation_db()
+        
+        logger.info(f"DailyRecommendationService initialized with capital=${capital:,.2f}")
+    
+    def _init_recommendation_db(self):
+        """Initialize SQLite database for recommendations."""
+        db_path = self.store.base_path / "recommendations.db"
+        
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Create recommendations table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS recommendations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    entry_price REAL,
+                    entry_band_min REAL,
+                    entry_band_max REAL,
+                    stop_loss REAL,
+                    take_profit REAL,
+                    quantity REAL,
+                    risk_amount REAL,
+                    risk_percentage REAL,
+                    rationale TEXT NOT NULL,
+                    confidence INTEGER NOT NULL,
+                    dataset_hash TEXT NOT NULL,
+                    params_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    UNIQUE(date, symbol, timeframe)
+                )
+            """)
+            
+            # Create signals table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS signals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    strategy TEXT NOT NULL,
+                    direction INTEGER NOT NULL,
+                    strength REAL NOT NULL,
+                    components_json TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            
+            conn.commit()
     
     def get_daily_recommendation(
-        self,
-        symbol: str,
-        include_combinations: bool = True
-    ) -> Optional[DailyRecommendation]:
-        """Get daily trading recommendation.
+        self, 
+        symbol: str, 
+        date: str,
+        timeframes: List[str] = None
+    ) -> Recommendation:
+        """Generate daily recommendation for symbol/date.
         
         Args:
             symbol: Trading symbol
-            include_combinations: Whether to include strategy combinations
+            date: Date in YYYY-MM-DD format
+            timeframes: List of timeframes to analyze
             
         Returns:
-            Daily recommendation or None if insufficient data
+            Recommendation object or HOLD with reason
         """
+        if timeframes is None:
+            timeframes = ["15m", "1h", "4h", "1d"]
+        
         try:
-            logger.info(f"Generating daily recommendation for {symbol}")
+            logger.info(f"Generating recommendation for {symbol} on {date}")
             
-            # Step 1: Validate data availability
-            timeframes = settings.TARGET_TIMEFRAMES
-            validation_results = self.orchestrator.validate_data_availability(symbol, timeframes)
+            # Load multi-timeframe signals
+            mtf_signals = self._load_mtf_signals(symbol, date, timeframes)
             
-            # Check if we have sufficient data
-            valid_timeframes = [tf for tf, status in validation_results.items() if status.is_sufficient]
+            if not mtf_signals:
+                return self._create_hold_recommendation(
+                    symbol, date, "No signals available for analysis"
+                )
             
-            if not valid_timeframes:
-                logger.warning(f"No valid timeframes for {symbol}")
-                return None
+            # Compute combined score
+            combined_score, direction, confidence = self._compute_combined_score(mtf_signals)
             
-            logger.info(f"Valid timeframes: {valid_timeframes}")
+            if combined_score < 0.3:  # Low confidence threshold
+                return self._create_hold_recommendation(
+                    symbol, date, f"Low confidence score: {combined_score:.2f}"
+                )
             
-            # Step 2: Run multi-timeframe backtests
-            multi_results = self.orchestrator.run_multi_timeframe_backtests(symbol, valid_timeframes)
-            
-            # Filter empty results
-            filtered_results = {tf: results for tf, results in multi_results.items() if results}
-            
-            if not filtered_results:
-                logger.warning(f"No backtest results for {symbol}")
-                return None
-            
-            # Step 3: Run combinations if requested
-            combination_results = None
-            if include_combinations:
-                combination_results = {}
-                for tf in valid_timeframes:
-                    try:
-                        combos = self.orchestrator.run_strategy_combinations(symbol, tf)
-                        if combos:
-                            combination_results[tf] = combos
-                    except Exception as e:
-                        logger.warning(f"Combinations failed for {tf}: {e}")
-            
-            # Step 4: Calculate global ranking
-            ranked_strategies = self.ranking_service.rank_strategies(
-                filtered_results,
-                combination_results if combination_results else None
-            )
-            
-            if not ranked_strategies:
-                logger.warning(f"No ranked strategies for {symbol}")
-                return None
-            
-            # Step 5: Get best strategy
-            best_strategy = ranked_strategies[0]
-            
-            # Find best timeframe for this strategy
-            best_timeframe, best_metrics = self._find_best_timeframe(best_strategy)
-            
-            # Calculate confidence level
-            confidence_level = self._calculate_confidence(best_strategy, len(valid_timeframes))
-            
-            # Calculate cross-timeframe agreement
-            agreement = self._calculate_timeframe_agreement(best_strategy.strategy_name, ranked_strategies, valid_timeframes)
+            # Check for strong conflicts
+            if self._has_strong_conflict(mtf_signals):
+                return self._create_hold_recommendation(
+                    symbol, date, "Strong directional conflict between timeframes"
+                )
             
             # Generate trade plan
-            trade_plan = self._generate_trade_plan(
-                symbol,
-                best_timeframe,
-                best_strategy.strategy_name,
-                best_metrics
-            )
+            trade_plan = self._generate_trade_plan(symbol, date, direction, mtf_signals)
             
-            # Build reasoning
-            reasoning = self._build_reasoning(best_strategy, valid_timeframes, confidence_level)
-            
-            # Build warnings
-            warnings = self._build_warnings(validation_results, confidence_level)
-            
-            # Get alternatives
-            alternatives = self._get_alternatives(ranked_strategies[:4])
+            if not trade_plan:
+                return self._create_hold_recommendation(
+                    symbol, date, "Unable to generate valid trade plan"
+                )
             
             # Create recommendation
-            recommendation = DailyRecommendation(
-                date=datetime.now().strftime('%Y-%m-%d'),
+            recommendation = Recommendation(
+                date=date,
                 symbol=symbol,
-                recommended_strategy=best_strategy.strategy_name,
-                recommended_timeframe=best_timeframe,
-                is_combination=best_strategy.is_combination,
-                global_score=best_strategy.global_score,
-                global_rank=best_strategy.global_rank,
-                confidence_level=confidence_level,
-                expected_sharpe=best_strategy.best_sharpe,
-                expected_win_rate=best_strategy.best_win_rate,
-                expected_cagr=best_strategy.best_cagr,
-                expected_max_dd=best_strategy.worst_max_dd,
-                expected_profit_factor=best_strategy.best_profit_factor,
-                expected_expectancy=best_strategy.best_expectancy,
-                sharpe_consistency=best_strategy.sharpe_consistency,
-                cross_timeframe_agreement=agreement,
-                signal_direction=trade_plan['signal_direction'],
-                entry_price=trade_plan.get('entry_price'),
-                stop_loss=trade_plan.get('stop_loss'),
-                take_profit=trade_plan.get('take_profit'),
-                quantity=trade_plan.get('quantity'),
-                risk_amount=trade_plan.get('risk_amount'),
-                alternatives=alternatives,
-                reasoning=reasoning,
-                warnings=warnings
+                timeframe=trade_plan["timeframe"],
+                direction=PlanDirection.LONG if direction > 0 else PlanDirection.SHORT,
+                entry_band=trade_plan["entry_band"],
+                entry_price=trade_plan["entry_price"],
+                stop_loss=trade_plan["stop_loss"],
+                take_profit=trade_plan["take_profit"],
+                quantity=trade_plan["quantity"],
+                risk_amount=trade_plan["risk_amount"],
+                risk_percentage=trade_plan["risk_percentage"],
+                rationale=trade_plan["rationale"],
+                confidence=int(confidence * 100),
+                dataset_hash=trade_plan["dataset_hash"],
+                params_hash=trade_plan["params_hash"],
+                expires_at=datetime.fromisoformat(date) + timedelta(hours=24)
             )
             
-            logger.info(f"✅ Recommendation: {recommendation.recommended_strategy} on {recommendation.recommended_timeframe}")
+            # Persist recommendation
+            self._persist_recommendation(recommendation)
             
+            logger.info(f"Generated recommendation: {direction} with confidence {confidence:.2f}")
             return recommendation
             
         except Exception as e:
-            logger.error(f"Error generating daily recommendation: {e}")
-            return None
+            logger.error(f"Error generating recommendation: {e}")
+            return self._create_hold_recommendation(
+                symbol, date, f"Error in analysis: {str(e)}"
+            )
     
-    def _find_best_timeframe(self, strategy: RankedStrategy) -> Tuple[str, Dict]:
-        """Find best timeframe for a strategy."""
-        best_tf = None
-        best_sharpe = -999
-        best_metrics = {}
+    def _load_mtf_signals(self, symbol: str, date: str, timeframes: List[str]) -> Dict[str, Dict]:
+        """Load multi-timeframe signals for analysis."""
+        mtf_signals = {}
         
-        for tf, metrics in strategy.timeframe_breakdown.items():
-            if metrics['sharpe_ratio'] > best_sharpe:
-                best_sharpe = metrics['sharpe_ratio']
-                best_tf = tf
-                best_metrics = metrics
+        for tf in timeframes:
+            try:
+                # Load data for the specific date
+                target_date = datetime.fromisoformat(date)
+                start_date = target_date - timedelta(days=1)
+                end_date = target_date + timedelta(days=1)
+                
+                bars = self.store.read_bars(symbol, tf, since=start_date, until=end_date)
+                
+                if not bars:
+                    logger.warning(f"No data for {symbol} {tf} on {date}")
+                    continue
+                
+                # Convert to DataFrame
+                if isinstance(bars, list):
+                    df = pd.DataFrame([bar.to_dict() for bar in bars])
+                    df = df.sort_values('timestamp').reset_index(drop=True)
+                
+                # Filter to target date
+                target_ts = int(target_date.timestamp() * 1000)
+                df = df[df['timestamp'] <= target_ts]
+                
+                if len(df) < 50:  # Need minimum data for signals
+                    continue
+                
+                # Generate signals for multiple strategies
+                strategies = ["ma_crossover", "rsi_regime_pullback", "trend_following_ema"]
+                tf_signals = {}
+                
+                for strategy in strategies:
+                    try:
+                        signal_output = generate_signal(df['close'], strategy)
+                        if signal_output and not signal_output.signal.empty:
+                            # Get latest signal
+                            latest_signal = signal_output.signal.iloc[-1]
+                            signal_strength = abs(latest_signal)
+                            
+                            tf_signals[strategy] = {
+                                "direction": int(latest_signal),
+                                "strength": float(signal_strength),
+                                "timestamp": df['timestamp'].iloc[-1],
+                                "price": float(df['close'].iloc[-1])
+                            }
+                    except Exception as e:
+                        logger.warning(f"Error generating {strategy} signal for {tf}: {e}")
+                        continue
+                
+                if tf_signals:
+                    mtf_signals[tf] = {
+                        "signals": tf_signals,
+                        "current_price": float(df['close'].iloc[-1]),
+                        "atr": self._calculate_atr(df, period=14)
+                    }
+                    
+            except Exception as e:
+                logger.error(f"Error loading signals for {tf}: {e}")
+                continue
         
-        return best_tf or "1h", best_metrics
+        return mtf_signals
     
-    def _calculate_confidence(self, strategy: RankedStrategy, num_timeframes: int) -> str:
-        """Calculate confidence level."""
-        # High confidence if:
-        # - High global score
-        # - Good consistency
-        # - Tested on multiple timeframes
+    def _compute_combined_score(self, mtf_signals: Dict[str, Dict]) -> Tuple[float, int, float]:
+        """Compute combined score from multi-timeframe signals."""
+        if not mtf_signals:
+            return 0.0, 0, 0.0
         
-        if strategy.global_score > 0.7 and strategy.sharpe_consistency < 0.3 and num_timeframes >= 3:
-            return "HIGH"
-        elif strategy.global_score > 0.5 and num_timeframes >= 2:
-            return "MEDIUM"
+        # Weights for different timeframes (longer = more weight)
+        timeframe_weights = {
+            "15m": 0.1,
+            "1h": 0.2,
+            "4h": 0.3,
+            "1d": 0.4
+        }
+        
+        total_score = 0.0
+        total_weight = 0.0
+        direction_votes = []
+        
+        for tf, data in mtf_signals.items():
+            weight = timeframe_weights.get(tf, 0.1)
+            
+            # Aggregate signals for this timeframe
+            tf_direction = 0
+            tf_strength = 0.0
+            
+            for strategy, signal_data in data["signals"].items():
+                direction = signal_data["direction"]
+                strength = signal_data["strength"]
+                
+                if direction != 0:  # Only count non-zero signals
+                    tf_direction += direction
+                    tf_strength += strength
+            
+            if tf_direction != 0:
+                # Normalize direction (-1, 0, 1)
+                tf_direction = 1 if tf_direction > 0 else -1
+                tf_score = tf_strength * weight
+                
+                total_score += tf_score * tf_direction
+                total_weight += weight
+                direction_votes.append(tf_direction)
+        
+        if total_weight == 0:
+            return 0.0, 0, 0.0
+        
+        # Normalize score
+        normalized_score = total_score / total_weight
+        
+        # Determine final direction
+        if len(direction_votes) >= 2:
+            # Majority vote
+            final_direction = 1 if sum(direction_votes) > 0 else -1
         else:
-            return "LOW"
+            final_direction = 1 if normalized_score > 0 else -1
+        
+        # Calculate confidence based on agreement
+        agreement = len([d for d in direction_votes if d == final_direction]) / len(direction_votes) if direction_votes else 0.0
+        confidence = min(abs(normalized_score), agreement)
+        
+        return abs(normalized_score), final_direction, confidence
     
-    def _calculate_timeframe_agreement(
-        self,
-        strategy_name: str,
-        all_ranked: List[RankedStrategy],
-        timeframes: List[str]
-    ) -> float:
-        """Calculate what percentage of timeframes rank this strategy in top 3."""
-        # This would require per-timeframe rankings, simplified for now
-        return 0.8 if strategy_name in [s.strategy_name for s in all_ranked[:3]] else 0.5
+    def _has_strong_conflict(self, mtf_signals: Dict[str, Dict]) -> bool:
+        """Check for strong directional conflicts between timeframes."""
+        directions = []
+        
+        for tf, data in mtf_signals.items():
+            tf_direction = 0
+            for strategy, signal_data in data["signals"].items():
+                if signal_data["direction"] != 0:
+                    tf_direction += signal_data["direction"]
+            
+            if tf_direction != 0:
+                directions.append(1 if tf_direction > 0 else -1)
+        
+        if len(directions) < 2:
+            return False
+        
+        # Check for strong conflict (opposite directions)
+        positive_count = sum(1 for d in directions if d > 0)
+        negative_count = sum(1 for d in directions if d < 0)
+        
+        # Strong conflict if we have both positive and negative with at least 2 each
+        return positive_count >= 2 and negative_count >= 2
     
-    def _generate_trade_plan(
-        self,
-        symbol: str,
-        timeframe: str,
-        strategy_name: str,
-        metrics: Dict
-    ) -> Dict:
-        """Generate trade plan for the recommendation."""
+    def _generate_trade_plan(self, symbol: str, date: str, direction: int, mtf_signals: Dict[str, Dict]) -> Optional[Dict]:
+        """Generate detailed trade plan."""
         try:
-            from app.data.store import DataStore
-            from app.core.risk import compute_levels
+            # Find best timeframe (highest confidence)
+            best_tf = max(mtf_signals.keys(), key=lambda tf: mtf_signals[tf].get("signals", {}))
+            best_data = mtf_signals[best_tf]
             
-            # Load current data
-            store = DataStore()
-            bars = store.read_bars(symbol, timeframe, max_bars=100)
+            current_price = best_data["current_price"]
+            atr = best_data["atr"]
             
-            if not bars or len(bars) < 10:
-                return {'signal_direction': 0}
+            # Calculate entry band
+            entry_band = [
+                current_price * 0.995,  # 0.5% below
+                current_price * 1.005   # 0.5% above
+            ]
             
-            # Get current price
-            df = pd.DataFrame([bar.to_dict() for bar in bars])
-            df = df.sort_values('timestamp').reset_index(drop=True)
-            current_price = float(df['close'].iloc[-1])
-            
-            # Simple signal based on strategy (simplified for now)
-            signal_direction = 1 if metrics.get('win_rate', 0) > 0.5 else 0
-            
-            # Calculate levels using ATR
-            atr_period = 14
-            if len(df) >= atr_period:
-                high_low = df['high'] - df['low']
-                high_close = np.abs(df['high'] - df['close'].shift())
-                low_close = np.abs(df['low'] - df['close'].shift())
-                true_range = np.maximum(high_low, np.maximum(high_close, low_close))
-                atr = true_range.rolling(window=atr_period).mean().iloc[-1]
-            else:
-                atr = current_price * 0.02
-            
-            # Calculate entry, SL, TP
-            if signal_direction == 1:  # Long
-                entry_price = current_price
-                stop_loss = entry_price - (atr * 2.0)
-                take_profit = entry_price + (atr * 3.0)
-            else:  # Flat
-                entry_price = current_price
-                stop_loss = None
-                take_profit = None
+            # Calculate stop loss and take profit
+            if direction > 0:  # LONG
+                stop_loss = current_price - (atr * 2.0)
+                take_profit = current_price + (atr * 3.0)
+            else:  # SHORT
+                stop_loss = current_price + (atr * 2.0)
+                take_profit = current_price - (atr * 3.0)
             
             # Calculate position size
-            if stop_loss:
-                risk_per_trade = self.capital * self.max_risk_pct
-                risk_per_unit = abs(entry_price - stop_loss)
-                quantity = risk_per_trade / risk_per_unit if risk_per_unit > 0 else 0
-                risk_amount = risk_per_trade
-            else:
-                quantity = 0
-                risk_amount = 0
+            risk_per_trade = self.capital * (self.max_risk_pct / 100)
+            risk_per_unit = abs(current_price - stop_loss)
+            quantity = risk_per_trade / risk_per_unit if risk_per_unit > 0 else 0
+            
+            # Generate rationale
+            rationale = f"Multi-timeframe analysis shows {direction} signal with ATR-based risk management"
+            
+            # Create hashes for data integrity
+            dataset_content = json.dumps({tf: data for tf, data in mtf_signals.items()}, sort_keys=True)
+            dataset_hash = hashlib.sha256(dataset_content.encode()).hexdigest()
+            
+            params_content = json.dumps({
+                "capital": self.capital,
+                "max_risk_pct": self.max_risk_pct,
+                "atr_multiplier_sl": 2.0,
+                "atr_multiplier_tp": 3.0
+            }, sort_keys=True)
+            params_hash = hashlib.sha256(params_content.encode()).hexdigest()
             
             return {
-                'signal_direction': signal_direction,
-                'entry_price': entry_price,
-                'stop_loss': stop_loss,
-                'take_profit': take_profit,
-                'quantity': quantity,
-                'risk_amount': risk_amount
+                "timeframe": best_tf,
+                "entry_band": entry_band,
+                "entry_price": current_price,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "quantity": quantity,
+                "risk_amount": risk_per_trade,
+                "risk_percentage": self.max_risk_pct,
+                "rationale": rationale,
+                "dataset_hash": dataset_hash,
+                "params_hash": params_hash
             }
             
         except Exception as e:
             logger.error(f"Error generating trade plan: {e}")
-            return {'signal_direction': 0}
+            return None
     
-    def _build_reasoning(
-        self,
-        strategy: RankedStrategy,
-        timeframes: List[str],
-        confidence: str
-    ) -> str:
-        """Build reasoning text."""
-        reasoning_parts = []
-        
-        reasoning_parts.append(
-            f"Estrategia '{strategy.strategy_name}' rankeada #1 globalmente "
-            f"con score de {strategy.global_score:.2f}."
-        )
-        
-        reasoning_parts.append(
-            f"Analizada en {len(timeframes)} temporalidades con "
-            f"Sharpe promedio de {strategy.best_sharpe:.2f} y "
-            f"Win Rate de {strategy.best_win_rate:.1%}."
-        )
-        
-        if strategy.is_combination:
-            reasoning_parts.append(
-                "Esta es una combinación de estrategias que ofrece mayor robustez."
-            )
-        
-        reasoning_parts.append(
-            f"Nivel de confianza: {confidence} basado en consistencia "
-            f"entre timeframes ({strategy.sharpe_consistency:.2f})."
-        )
-        
-        return " ".join(reasoning_parts)
+    def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> float:
+        """Calculate Average True Range."""
+        try:
+            high = df['high']
+            low = df['low']
+            close = df['close']
+            
+            # True Range calculation
+            tr1 = high - low
+            tr2 = abs(high - close.shift())
+            tr3 = abs(low - close.shift())
+            
+            true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            atr = true_range.rolling(window=period).mean().iloc[-1]
+            
+            return float(atr) if not pd.isna(atr) else df['close'].iloc[-1] * 0.02  # 2% fallback
+        except Exception:
+            return df['close'].iloc[-1] * 0.02  # 2% fallback
     
-    def _build_warnings(
-        self,
-        validation_results: Dict,
-        confidence: str
-    ) -> List[str]:
-        """Build warning messages."""
-        warnings = []
-        
-        # Check for missing timeframes
-        missing_tfs = [tf for tf, status in validation_results.items() if not status.is_sufficient]
-        if missing_tfs:
-            warnings.append(f"Datos insuficientes para: {', '.join(missing_tfs)}")
-        
-        # Low confidence warning
-        if confidence == "LOW":
-            warnings.append("Confianza baja - considerar análisis manual adicional")
-        
-        return warnings
+    def _create_hold_recommendation(self, symbol: str, date: str, reason: str) -> Recommendation:
+        """Create HOLD recommendation with reason."""
+        return Recommendation(
+            date=date,
+            symbol=symbol,
+            timeframe="1h",
+            direction=PlanDirection.HOLD,
+            rationale=f"HOLD: {reason}",
+            confidence=0,
+            dataset_hash="hold_hash",
+            params_hash="hold_params"
+        )
     
-    def _get_alternatives(self, top_strategies: List[RankedStrategy]) -> List[Dict]:
-        """Get alternative strategies."""
-        alternatives = []
+    def _persist_recommendation(self, recommendation: Recommendation):
+        """Persist recommendation to database."""
+        db_path = self.store.base_path / "recommendations.db"
         
-        for i, strategy in enumerate(top_strategies[1:4], 2):  # Skip first (recommended)
-            alternatives.append({
-                'rank': i,
-                'name': strategy.strategy_name,
-                'score': strategy.global_score,
-                'sharpe': strategy.best_sharpe,
-                'win_rate': strategy.best_win_rate,
-                'is_combination': strategy.is_combination
-            })
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT OR REPLACE INTO recommendations 
+                (date, symbol, timeframe, direction, entry_price, entry_band_min, entry_band_max,
+                 stop_loss, take_profit, quantity, risk_amount, risk_percentage, rationale,
+                 confidence, dataset_hash, params_hash, created_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                recommendation.date,
+                recommendation.symbol,
+                recommendation.timeframe,
+                recommendation.direction.value,
+                recommendation.entry_price,
+                recommendation.entry_band[0] if recommendation.entry_band else None,
+                recommendation.entry_band[1] if recommendation.entry_band else None,
+                recommendation.stop_loss,
+                recommendation.take_profit,
+                recommendation.quantity,
+                recommendation.risk_amount,
+                recommendation.risk_percentage,
+                recommendation.rationale,
+                recommendation.confidence,
+                recommendation.dataset_hash,
+                recommendation.params_hash,
+                recommendation.created_at.isoformat(),
+                recommendation.expires_at.isoformat() if recommendation.expires_at else None
+            ))
+            
+            conn.commit()
+    
+    def get_recommendation_history(
+        self, 
+        symbol: str, 
+        from_date: str, 
+        to_date: str
+    ) -> List[Recommendation]:
+        """Get recommendation history for symbol and date range."""
+        db_path = self.store.base_path / "recommendations.db"
         
-        return alternatives
-
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT date, symbol, timeframe, direction, entry_price, entry_band_min, entry_band_max,
+                       stop_loss, take_profit, quantity, risk_amount, risk_percentage, rationale,
+                       confidence, dataset_hash, params_hash, created_at, expires_at
+                FROM recommendations 
+                WHERE symbol = ? AND date BETWEEN ? AND ?
+                ORDER BY date DESC
+            """, (symbol, from_date, to_date))
+            
+            rows = cursor.fetchall()
+            
+            recommendations = []
+            for row in rows:
+                recommendations.append(Recommendation(
+                    date=row[0],
+                    symbol=row[1],
+                    timeframe=row[2],
+                    direction=PlanDirection(row[3]),
+                    entry_price=row[4],
+                    entry_band=[row[5], row[6]] if row[5] and row[6] else None,
+                    stop_loss=row[7],
+                    take_profit=row[8],
+                    quantity=row[9],
+                    risk_amount=row[10],
+                    risk_percentage=row[11],
+                    rationale=row[12],
+                    confidence=row[13],
+                    dataset_hash=row[14],
+                    params_hash=row[15],
+                    created_at=datetime.fromisoformat(row[16]),
+                    expires_at=datetime.fromisoformat(row[17]) if row[17] else None
+                ))
+            
+            return recommendations
