@@ -113,7 +113,7 @@ async def get_recommendation_history(
         # Get history
         recommendations = service.get_recommendation_history(symbol, from_date, to_date)
         
-        logger.info(f"Retrieved {len(recommendations)} recommendations for {symbol} from {from_date} to {to_date")
+        logger.info(f"Retrieved {len(recommendations)} recommendations for {symbol} from {from_date} to {to_date}")
         return recommendations
         
     except HTTPException:

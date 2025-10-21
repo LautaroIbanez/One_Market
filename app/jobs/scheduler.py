@@ -12,6 +12,7 @@ import traceback
 from app.jobs.daily_rank import DailyRankJob
 from app.jobs.make_recommendation import MakeRecommendationJob
 from app.jobs.publish_briefing import PublishBriefingJob
+from app.jobs.update_data_job import UpdateDataJob
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ class OneMarketScheduler:
     def __init__(self):
         """Initialize scheduler."""
         self.jobs = {
+            'update_data': UpdateDataJob(),
             'daily_rank': DailyRankJob(),
             'make_recommendation': MakeRecommendationJob(),
             'publish_briefing': PublishBriefingJob()
@@ -55,6 +57,14 @@ class OneMarketScheduler:
     
     async def _schedule_jobs(self):
         """Schedule all jobs."""
+        # Update data job - runs at 5:00 AM UTC
+        asyncio.create_task(self._run_periodic_job(
+            'update_data',
+            hour=5,
+            minute=0,
+            description="Update market data"
+        ))
+        
         # Daily rank job - runs at 6:00 AM UTC
         asyncio.create_task(self._run_periodic_job(
             'daily_rank',
