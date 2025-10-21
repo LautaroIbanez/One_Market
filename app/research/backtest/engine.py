@@ -99,6 +99,13 @@ class BacktestResult(BaseModel):
     end_date: datetime = Field(..., description="Backtest end date")
     initial_capital: float = Field(..., description="Initial capital")
     final_capital: float = Field(..., description="Final capital")
+    profit: float = Field(..., description="Total profit")
+    
+    # Data integrity
+    dataset_hash: str = Field(..., description="Dataset hash")
+    params_hash: str = Field(..., description="Parameters hash")
+    from_timestamp: int = Field(..., description="Start timestamp")
+    to_timestamp: int = Field(..., description="End timestamp")
     
     # Detailed trades list
     trades: List[Dict] = Field(default_factory=list, description="Detailed list of all trades executed")
@@ -544,12 +551,21 @@ class BacktestEngine:
         
         # Calculate metrics
         if not trades:
+            # Handle empty DataFrame
+            if len(df) == 0:
+                start_date = datetime.now() - timedelta(days=30)
+                end_date = datetime.now()
+            else:
+                start_date = df.index[0]
+                end_date = df.index[-1]
+            
             return BacktestResult(
                 strategy_name=strategy_name,
-                start_date=df.index[0],
-                end_date=df.index[-1],
+                start_date=start_date,
+                end_date=end_date,
                 initial_capital=self.config.initial_capital,
                 final_capital=self.config.initial_capital,
+                profit=0.0,
                 total_return=0.0,
                 cagr=0.0,
                 sharpe_ratio=0.0,
@@ -565,6 +581,10 @@ class BacktestEngine:
                 losing_trades=0,
                 avg_win=0.0,
                 avg_loss=0.0,
+                dataset_hash="empty_hash",
+                params_hash="empty_params",
+                from_timestamp=int(start_date.timestamp() * 1000),
+                to_timestamp=int(end_date.timestamp() * 1000),
                 trades=trades
             )
         
@@ -596,12 +616,38 @@ class BacktestEngine:
             print(f"Fallback backtest completed: {len(trades)} trades")
             print(f"Final capital: ${capital:.2f}")
         
+        # Calculate profit
+        profit = capital - self.config.initial_capital
+        
+        # Generate hashes for data integrity
+        import hashlib
+        import json
+        
+        # Dataset hash (simplified)
+        dataset_content = json.dumps({
+            "start": start_date.isoformat(),
+            "end": end_date.isoformat(),
+            "bars": len(df)
+        }, sort_keys=True)
+        dataset_hash = hashlib.sha256(dataset_content.encode()).hexdigest()
+        
+        # Parameters hash
+        params_content = json.dumps({
+            "risk_per_trade": self.config.risk_per_trade,
+            "commission": self.config.commission,
+            "slippage": self.config.slippage,
+            "one_trade_per_day": self.config.one_trade_per_day,
+            "use_trading_windows": self.config.use_trading_windows
+        }, sort_keys=True)
+        params_hash = hashlib.sha256(params_content.encode()).hexdigest()
+        
         return BacktestResult(
             strategy_name=strategy_name,
-            start_date=df.index[0],
-            end_date=df.index[-1],
+            start_date=start_date,
+            end_date=end_date,
             initial_capital=self.config.initial_capital,
             final_capital=capital,
+            profit=profit,
             total_return=metrics['total_return'],
             cagr=metrics['cagr'],
             sharpe_ratio=metrics['sharpe_ratio'],
@@ -617,6 +663,10 @@ class BacktestEngine:
             losing_trades=metrics['losing_trades'],
             avg_win=metrics['avg_win'],
             avg_loss=metrics['avg_loss'],
+            dataset_hash=dataset_hash,
+            params_hash=params_hash,
+            from_timestamp=int(start_date.timestamp() * 1000),
+            to_timestamp=int(end_date.timestamp() * 1000),
             trades=trades
         )
 

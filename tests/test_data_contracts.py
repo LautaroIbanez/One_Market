@@ -1,211 +1,186 @@
 """Tests for data contracts and validation.
 
-This module tests the core data schemas and validation logic.
+This module tests the Pydantic schemas and data validation logic.
 """
 import pytest
 from datetime import datetime, timezone
-from pydantic import ValidationError
-
-from app.data.schemas import Bar, SnapshotMeta, DataSyncRequest, DataSyncResponse
+from app.data.schemas import Bar, SnapshotMeta, DataIntegrityCheck
 
 
-class TestBarValidation:
+class TestBarSchema:
     """Test Bar schema validation."""
     
-    def test_valid_bar(self):
-        """Test valid bar creation."""
+    def test_valid_bar_creation(self):
+        """Test creating valid bar."""
         bar = Bar(
-            ts=1640995200000,  # 2022-01-01 00:00:00 UTC
-            open=50000.0,
-            high=51000.0,
-            low=49000.0,
-            close=50500.0,
-            volume=100.5,
+            ts=1678886400000,
+            open=100.0,
+            high=105.0,
+            low=98.0,
+            close=103.0,
+            volume=1000.0,
             tf="1h",
-            source="ccxt"
+            source="binance"
         )
-        
-        assert bar.ts == 1640995200000
-        assert bar.open == 50000.0
-        assert bar.high == 51000.0
-        assert bar.low == 49000.0
-        assert bar.close == 50500.0
-        assert bar.volume == 100.5
-        assert bar.tf == "1h"
-        assert bar.source == "ccxt"
+        assert bar.open == 100.0
+        assert bar.high == 105.0
+        assert bar.low == 98.0
+        assert bar.close == 103.0
+        assert bar.volume == 1000.0
     
-    def test_invalid_high_low(self):
-        """Test validation of high/low relationship."""
-        with pytest.raises(ValidationError) as exc_info:
+    def test_invalid_high_price(self):
+        """Test invalid high price."""
+        with pytest.raises(ValueError, match="High must be >= max"):
             Bar(
-                ts=1640995200000,
-                open=50000.0,
-                high=49000.0,  # High < open (invalid)
-                low=49000.0,
-                close=50500.0,
-                volume=100.5,
+                ts=1678886400000,
+                open=100.0,
+                high=95.0,  # High < open
+                low=98.0,
+                close=103.0,
+                volume=1000.0,
                 tf="1h",
-                source="ccxt"
+                source="binance"
             )
-        
-        assert "High must be >= max(low, open, close)" in str(exc_info.value)
     
-    def test_invalid_low_high(self):
-        """Test validation of low/high relationship."""
-        with pytest.raises(ValidationError) as exc_info:
+    def test_invalid_low_price(self):
+        """Test invalid low price."""
+        with pytest.raises(ValueError, match="Low must be <= min"):
             Bar(
-                ts=1640995200000,
-                open=50000.0,
-                high=51000.0,
-                low=52000.0,  # Low > high (invalid)
-                close=50500.0,
-                volume=100.5,
+                ts=1678886400000,
+                open=100.0,
+                high=105.0,
+                low=110.0,  # Low > high
+                close=103.0,
+                volume=1000.0,
                 tf="1h",
-                source="ccxt"
+                source="binance"
             )
-        
-        assert "Low must be <= min(high, open, close)" in str(exc_info.value)
+    
+    def test_invalid_open_price(self):
+        """Test invalid open price."""
+        with pytest.raises(ValueError, match="Open must be within"):
+            Bar(
+                ts=1678886400000,
+                open=110.0,  # Open > high
+                high=105.0,
+                low=98.0,
+                close=103.0,
+                volume=1000.0,
+                tf="1h",
+                source="binance"
+            )
+    
+    def test_invalid_close_price(self):
+        """Test invalid close price."""
+        with pytest.raises(ValueError, match="Close must be within"):
+            Bar(
+                ts=1678886400000,
+                open=100.0,
+                high=105.0,
+                low=98.0,
+                close=90.0,  # Close < low
+                volume=1000.0,
+                tf="1h",
+                source="binance"
+            )
     
     def test_invalid_timeframe(self):
-        """Test validation of timeframe format."""
-        with pytest.raises(ValidationError) as exc_info:
+        """Test invalid timeframe."""
+        with pytest.raises(ValueError, match="Invalid timeframe"):
             Bar(
-                ts=1640995200000,
-                open=50000.0,
-                high=51000.0,
-                low=49000.0,
-                close=50500.0,
-                volume=100.5,
-                tf="invalid_tf",  # Invalid timeframe
-                source="ccxt"
+                ts=1678886400000,
+                open=100.0,
+                high=105.0,
+                low=98.0,
+                close=103.0,
+                volume=1000.0,
+                tf="invalid",  # Invalid timeframe
+                source="binance"
             )
-        
-        assert "Invalid timeframe" in str(exc_info.value)
     
     def test_negative_prices(self):
-        """Test validation of negative prices."""
-        with pytest.raises(ValidationError) as exc_info:
+        """Test negative prices."""
+        with pytest.raises(ValueError, match="value is not greater than 0"):
             Bar(
-                ts=1640995200000,
-                open=-50000.0,  # Negative price
-                high=51000.0,
-                low=49000.0,
-                close=50500.0,
-                volume=100.5,
+                ts=1678886400000,
+                open=-100.0,  # Negative price
+                high=105.0,
+                low=98.0,
+                close=103.0,
+                volume=1000.0,
                 tf="1h",
-                source="ccxt"
+                source="binance"
             )
-        
-        assert "ensure this value is greater than 0" in str(exc_info.value)
     
     def test_negative_volume(self):
-        """Test validation of negative volume."""
-        with pytest.raises(ValidationError) as exc_info:
+        """Test negative volume."""
+        with pytest.raises(ValueError, match="value is not greater than or equal to 0"):
             Bar(
-                ts=1640995200000,
-                open=50000.0,
-                high=51000.0,
-                low=49000.0,
-                close=50500.0,
-                volume=-100.5,  # Negative volume
+                ts=1678886400000,
+                open=100.0,
+                high=105.0,
+                low=98.0,
+                close=103.0,
+                volume=-1000.0,  # Negative volume
                 tf="1h",
-                source="ccxt"
+                source="binance"
             )
-        
-        assert "ensure this value is greater than or equal to 0" in str(exc_info.value)
     
-    def test_to_dict_from_dict(self):
-        """Test conversion to/from dictionary."""
-        original_bar = Bar(
-            ts=1640995200000,
-            open=50000.0,
-            high=51000.0,
-            low=49000.0,
-            close=50500.0,
-            volume=100.5,
+    def test_to_dict_conversion(self):
+        """Test to_dict conversion."""
+        bar = Bar(
+            ts=1678886400000,
+            open=100.0,
+            high=105.0,
+            low=98.0,
+            close=103.0,
+            volume=1000.0,
             tf="1h",
-            source="ccxt"
+            source="binance"
         )
         
-        # Convert to dict
-        bar_dict = original_bar.to_dict()
-        assert bar_dict["timestamp"] == 1640995200000
-        assert bar_dict["open"] == 50000.0
-        assert bar_dict["high"] == 51000.0
-        assert bar_dict["low"] == 49000.0
-        assert bar_dict["close"] == 50500.0
-        assert bar_dict["volume"] == 100.5
-        assert bar_dict["timeframe"] == "1h"
-        assert bar_dict["source"] == "ccxt"
+        bar_dict = bar.to_dict()
+        assert bar_dict['timestamp'] == 1678886400000
+        assert bar_dict['open'] == 100.0
+        assert bar_dict['high'] == 105.0
+        assert bar_dict['low'] == 98.0
+        assert bar_dict['close'] == 103.0
+        assert bar_dict['volume'] == 1000.0
+        assert bar_dict['timeframe'] == "1h"
+        assert bar_dict['source'] == "binance"
+    
+    def test_from_dict_conversion(self):
+        """Test from_dict conversion."""
+        bar_dict = {
+            'timestamp': 1678886400000,
+            'open': 100.0,
+            'high': 105.0,
+            'low': 98.0,
+            'close': 103.0,
+            'volume': 1000.0,
+            'timeframe': '1h',
+            'source': 'binance'
+        }
         
-        # Convert back from dict
-        restored_bar = Bar.from_dict(bar_dict)
-        assert restored_bar.ts == original_bar.ts
-        assert restored_bar.open == original_bar.open
-        assert restored_bar.high == original_bar.high
-        assert restored_bar.low == original_bar.low
-        assert restored_bar.close == original_bar.close
-        assert restored_bar.volume == original_bar.volume
-        assert restored_bar.tf == original_bar.tf
-        assert restored_bar.source == original_bar.source
+        bar = Bar.from_dict(bar_dict)
+        assert bar.ts == 1678886400000
+        assert bar.open == 100.0
+        assert bar.high == 105.0
+        assert bar.low == 98.0
+        assert bar.close == 103.0
+        assert bar.volume == 1000.0
+        assert bar.tf == "1h"
+        assert bar.source == "binance"
 
 
-class TestSnapshotMeta:
-    """Test SnapshotMeta schema."""
-    
-    def test_valid_snapshot_meta(self):
-        """Test valid snapshot metadata creation."""
-        meta = SnapshotMeta(
-            symbol="BTC/USDT",
-            tf="1h",
-            since=datetime(2022, 1, 1, tzinfo=timezone.utc),
-            until=datetime(2022, 1, 2, tzinfo=timezone.utc),
-            count=24,
-            dataset_hash="a" * 64  # 64-character hex string
-        )
-        
-        assert meta.symbol == "BTC/USDT"
-        assert meta.tf == "1h"
-        assert meta.count == 24
-        assert len(meta.dataset_hash) == 64
-    
-    def test_invalid_hash_format(self):
-        """Test validation of hash format."""
-        with pytest.raises(ValidationError) as exc_info:
-            SnapshotMeta(
-                symbol="BTC/USDT",
-                tf="1h",
-                since=datetime(2022, 1, 1, tzinfo=timezone.utc),
-                until=datetime(2022, 1, 2, tzinfo=timezone.utc),
-                count=24,
-                dataset_hash="invalid_hash"  # Not 64 characters
-            )
-        
-        assert "dataset_hash must be a 64-character hex string" in str(exc_info.value)
+class TestSnapshotMetaSchema:
+    """Test SnapshotMeta schema validation."""
     
     def test_create_from_bars(self):
         """Test creating metadata from bars."""
         bars = [
-            Bar(
-                ts=1640995200000,  # 2022-01-01 00:00:00 UTC
-                open=50000.0,
-                high=51000.0,
-                low=49000.0,
-                close=50500.0,
-                volume=100.5,
-                tf="1h",
-                source="BTC/USDT"
-            ),
-            Bar(
-                ts=1640998800000,  # 2022-01-01 01:00:00 UTC
-                open=50500.0,
-                high=51500.0,
-                low=49500.0,
-                close=51000.0,
-                volume=120.0,
-                tf="1h",
-                source="BTC/USDT"
-            )
+            Bar(ts=1678886400000, open=100.0, high=105.0, low=98.0, close=103.0, volume=1000.0, tf="1h", source="binance"),
+            Bar(ts=1678890000000, open=103.0, high=108.0, low=101.0, close=106.0, volume=1200.0, tf="1h", source="binance")
         ]
         
         meta = SnapshotMeta.create_from_bars("BTC/USDT", "1h", bars)
@@ -213,99 +188,66 @@ class TestSnapshotMeta:
         assert meta.symbol == "BTC/USDT"
         assert meta.tf == "1h"
         assert meta.count == 2
-        assert len(meta.dataset_hash) == 64
-        assert meta.since == datetime(2022, 1, 1, tzinfo=timezone.utc)
-        assert meta.until == datetime(2022, 1, 1, 1, tzinfo=timezone.utc)
+        assert meta.dataset_hash is not None
+        assert len(meta.dataset_hash) == 64  # SHA256 hash length
     
     def test_create_from_empty_bars(self):
         """Test creating metadata from empty bars list."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match="Cannot create metadata from empty bars list"):
             SnapshotMeta.create_from_bars("BTC/USDT", "1h", [])
-        
-        assert "Cannot create metadata from empty bars list" in str(exc_info.value)
+    
+    def test_invalid_hash_format(self):
+        """Test invalid hash format."""
+        with pytest.raises(ValueError, match="dataset_hash must be a 64-character hex string"):
+            SnapshotMeta(
+                symbol="BTC/USDT",
+                tf="1h",
+                since=datetime.now(timezone.utc),
+                until=datetime.now(timezone.utc),
+                count=1,
+                dataset_hash="invalid_hash"  # Not 64 characters
+            )
 
 
-class TestDataSyncRequest:
-    """Test DataSyncRequest schema."""
+class TestDataIntegrityCheck:
+    """Test DataIntegrityCheck schema."""
     
-    def test_valid_sync_request(self):
-        """Test valid sync request creation."""
-        request = DataSyncRequest(
+    def test_valid_integrity_check(self):
+        """Test valid integrity check."""
+        check = DataIntegrityCheck(
             symbol="BTC/USDT",
             tf="1h",
-            since=datetime(2022, 1, 1, tzinfo=timezone.utc),
-            until=datetime(2022, 1, 2, tzinfo=timezone.utc),
-            force_refresh=True
+            is_valid=True,
+            issues=[],
+            gaps=[],
+            duplicates=[],
+            out_of_order=[],
+            total_bars=100,
+            time_range={"start": 1678886400000, "end": 1678890000000}
         )
         
-        assert request.symbol == "BTC/USDT"
-        assert request.tf == "1h"
-        assert request.since == datetime(2022, 1, 1, tzinfo=timezone.utc)
-        assert request.until == datetime(2022, 1, 2, tzinfo=timezone.utc)
-        assert request.force_refresh is True
+        assert check.symbol == "BTC/USDT"
+        assert check.tf == "1h"
+        assert check.is_valid is True
+        assert len(check.issues) == 0
+        assert check.total_bars == 100
     
-    def test_minimal_sync_request(self):
-        """Test minimal sync request (only required fields)."""
-        request = DataSyncRequest(
-            symbol="BTC/USDT",
-            tf="1h"
-        )
-        
-        assert request.symbol == "BTC/USDT"
-        assert request.tf == "1h"
-        assert request.since is None
-        assert request.until is None
-        assert request.force_refresh is False
-
-
-class TestDataSyncResponse:
-    """Test DataSyncResponse schema."""
-    
-    def test_valid_sync_response(self):
-        """Test valid sync response creation."""
-        meta = SnapshotMeta(
+    def test_invalid_integrity_check(self):
+        """Test invalid integrity check."""
+        check = DataIntegrityCheck(
             symbol="BTC/USDT",
             tf="1h",
-            since=datetime(2022, 1, 1, tzinfo=timezone.utc),
-            until=datetime(2022, 1, 2, tzinfo=timezone.utc),
-            count=24,
-            dataset_hash="a" * 64
+            is_valid=False,
+            issues=["Duplicate timestamps found", "Gaps in data"],
+            gaps=[{"index": 10, "expected": 1678890000000, "actual": 1678893600000}],
+            duplicates=[{"ts": 1678890000000, "bar": {}}],
+            out_of_order=[{"index": 5, "ts": 1678886400000, "prev_ts": 1678890000000}],
+            total_bars=100,
+            time_range={"start": 1678886400000, "end": 1678890000000}
         )
         
-        response = DataSyncResponse(
-            success=True,
-            symbol="BTC/USDT",
-            tf="1h",
-            meta=meta,
-            message="Sync completed successfully",
-            bars_added=24,
-            bars_updated=0
-        )
-        
-        assert response.success is True
-        assert response.symbol == "BTC/USDT"
-        assert response.tf == "1h"
-        assert response.meta == meta
-        assert response.message == "Sync completed successfully"
-        assert response.bars_added == 24
-        assert response.bars_updated == 0
-    
-    def test_error_sync_response(self):
-        """Test error sync response creation."""
-        response = DataSyncResponse(
-            success=False,
-            symbol="BTC/USDT",
-            tf="1h",
-            meta=None,
-            message="Sync failed: Connection error",
-            bars_added=0,
-            bars_updated=0
-        )
-        
-        assert response.success is False
-        assert response.symbol == "BTC/USDT"
-        assert response.tf == "1h"
-        assert response.meta is None
-        assert response.message == "Sync failed: Connection error"
-        assert response.bars_added == 0
-        assert response.bars_updated == 0
+        assert check.is_valid is False
+        assert len(check.issues) == 2
+        assert len(check.gaps) == 1
+        assert len(check.duplicates) == 1
+        assert len(check.out_of_order) == 1

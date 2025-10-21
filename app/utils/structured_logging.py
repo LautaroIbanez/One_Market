@@ -1,179 +1,336 @@
-"""Structured logging with structlog.
+"""Structured logging for One Market platform.
 
-This module provides structured logging with context for:
-- Symbol and timeframe tracking
-- Job execution logging
-- Critical events (entry, TP/SL hits, forced close)
-- Event persistence
+This module provides structured logging with JSONL format for traceability.
 """
-import structlog
-from pathlib import Path
-from datetime import datetime
-from typing import Optional, Dict, Any
 import json
-
-from app.config.settings import settings
-
-
-def configure_structlog():
-    """Configure structlog with processors and renderers."""
-    processors = [
-        structlog.contextvars.merge_contextvars,
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.StackInfoRenderer(),
-    ]
-    
-    if settings.STRUCTURED_LOGGING:
-        # JSON renderer for structured logs
-        processors.append(structlog.processors.JSONRenderer())
-    else:
-        # Console renderer for human-readable logs
-        processors.append(structlog.dev.ConsoleRenderer())
-    
-    # Get log level as integer
-    log_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
-    
-    structlog.configure(
-        processors=processors,
-        wrapper_class=structlog.make_filtering_bound_logger(log_level),
-        context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
-        cache_logger_on_first_use=True,
-    )
-
-
-# Configure on import
 import logging
-configure_structlog()
+import uuid
+from datetime import datetime, timezone
+from typing import Dict, Any, Optional
+from pathlib import Path
+import subprocess
+import os
 
-# Get logger
-logger = structlog.get_logger()
 
-
-class EventLogger:
-    """Logger for critical trading events."""
+class StructuredLogger:
+    """Structured logger with JSONL format."""
     
-    def __init__(self, events_file: Optional[Path] = None):
-        """Initialize event logger.
+    def __init__(self, log_file: str = "logs/one_market.log"):
+        """Initialize structured logger.
         
         Args:
-            events_file: Path to events file (defaults to logs/events.jsonl)
+            log_file: Path to log file
         """
-        if events_file is None:
-            events_file = settings.LOG_FILE_PATH.parent / "events.jsonl"
+        self.log_file = Path(log_file)
+        self.log_file.parent.mkdir(exist_ok=True)
         
-        self.events_file = events_file
-        self.events_file.parent.mkdir(parents=True, exist_ok=True)
+        # Get commit SHA
+        self.commit_sha = self._get_commit_sha()
+        
+        # Setup logger
+        self.logger = logging.getLogger("one_market")
+        self.logger.setLevel(logging.INFO)
+        
+        # Remove existing handlers
+        for handler in self.logger.handlers[:]:
+            self.logger.removeHandler(handler)
+        
+        # Add file handler
+        file_handler = logging.FileHandler(self.log_file)
+        file_handler.setLevel(logging.INFO)
+        
+        # Add formatter
+        formatter = logging.Formatter('%(message)s')
+        file_handler.setFormatter(formatter)
+        
+        self.logger.addHandler(file_handler)
+        
+        # Prevent propagation to root logger
+        self.logger.propagate = False
     
-    def log_event(self, event_type: str, data: Dict[str, Any]):
-        """Log a critical event.
+    def _get_commit_sha(self) -> str:
+        """Get current commit SHA.
         
-        Args:
-            event_type: Type of event (entry, exit, forced_close, etc.)
-            data: Event data
+        Returns:
+            Commit SHA or 'unknown' if not available
         """
-        event = {
-            "timestamp": datetime.now().isoformat(),
-            "event_type": event_type,
-            **data
-        }
+        try:
+            result = subprocess.run(
+                ['git', 'rev-parse', 'HEAD'],
+                capture_output=True,
+                text=True,
+                cwd=os.getcwd()
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()[:8]  # Short SHA
+        except Exception:
+            pass
         
-        # Log to structlog
-        logger.info(
-            f"Event: {event_type}",
-            event_type=event_type,
-            **data
-        )
-        
-        # Persist to file
-        with open(self.events_file, 'a') as f:
-            f.write(json.dumps(event) + '\n')
+        return "unknown"
     
-    def log_entry(self, symbol: str, signal: int, entry_price: float, stop_loss: float, take_profit: float, position_size: float):
-        """Log trade entry event."""
-        self.log_event("entry", {
-            "symbol": symbol,
-            "signal": signal,
-            "entry_price": entry_price,
-            "stop_loss": stop_loss,
-            "take_profit": take_profit,
-            "position_size": position_size
-        })
-    
-    def log_exit(self, symbol: str, exit_price: float, pnl: float, exit_reason: str):
-        """Log trade exit event."""
-        self.log_event("exit", {
-            "symbol": symbol,
-            "exit_price": exit_price,
-            "pnl": pnl,
-            "exit_reason": exit_reason
-        })
-    
-    def log_forced_close(self, symbol: str, exit_price: float, pnl: float):
-        """Log forced close event."""
-        self.log_event("forced_close", {
-            "symbol": symbol,
-            "exit_price": exit_price,
-            "pnl": pnl
-        })
-    
-    def log_signal_generated(self, symbol: str, timeframe: str, strategy: str, signal: int, strength: float):
-        """Log signal generation event."""
-        self.log_event("signal_generated", {
-            "symbol": symbol,
-            "timeframe": timeframe,
-            "strategy": strategy,
-            "signal": signal,
-            "strength": strength
-        })
-    
-    def log_decision(self, symbol: str, decision_data: Dict[str, Any]):
-        """Log daily decision event."""
-        self.log_event("daily_decision", {
-            "symbol": symbol,
-            **decision_data
-        })
-    
-    def read_events(self, event_type: Optional[str] = None, symbol: Optional[str] = None, limit: int = 100) -> list[Dict[str, Any]]:
-        """Read events from log file.
+    def _create_log_entry(
+        self,
+        level: str,
+        component: str,
+        message: str,
+        dataset_hash: Optional[str] = None,
+        params_hash: Optional[str] = None,
+        run_id: Optional[str] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Create structured log entry.
         
         Args:
-            event_type: Filter by event type
-            symbol: Filter by symbol
-            limit: Maximum events to return
+            level: Log level
+            component: Component name
+            message: Log message
+            dataset_hash: Dataset hash
+            params_hash: Parameters hash
+            run_id: Run ID
+            **kwargs: Additional fields
             
         Returns:
-            List of events
+            Structured log entry
         """
-        if not self.events_file.exists():
-            return []
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "run_id": run_id or str(uuid.uuid4()),
+            "component": component,
+            "level": level,
+            "message": message,
+            "commit_sha": self.commit_sha
+        }
         
-        events = []
+        if dataset_hash:
+            entry["dataset_hash"] = dataset_hash
         
-        with open(self.events_file, 'r') as f:
-            for line in f:
-                try:
-                    event = json.loads(line.strip())
-                    
-                    # Apply filters
-                    if event_type and event.get('event_type') != event_type:
-                        continue
-                    
-                    if symbol and event.get('symbol') != symbol:
-                        continue
-                    
-                    events.append(event)
-                    
-                    if len(events) >= limit:
-                        break
-                
-                except json.JSONDecodeError:
-                    continue
+        if params_hash:
+            entry["params_hash"] = params_hash
         
-        return events[-limit:]  # Return last N events
+        # Add additional fields
+        entry.update(kwargs)
+        
+        return entry
+    
+    def info(
+        self,
+        component: str,
+        message: str,
+        dataset_hash: Optional[str] = None,
+        params_hash: Optional[str] = None,
+        run_id: Optional[str] = None,
+        **kwargs
+    ):
+        """Log info message.
+        
+        Args:
+            component: Component name
+            message: Log message
+            dataset_hash: Dataset hash
+            params_hash: Parameters hash
+            run_id: Run ID
+            **kwargs: Additional fields
+        """
+        entry = self._create_log_entry(
+            "INFO", component, message, dataset_hash, params_hash, run_id, **kwargs
+        )
+        self.logger.info(json.dumps(entry))
+    
+    def warning(
+        self,
+        component: str,
+        message: str,
+        dataset_hash: Optional[str] = None,
+        params_hash: Optional[str] = None,
+        run_id: Optional[str] = None,
+        **kwargs
+    ):
+        """Log warning message.
+        
+        Args:
+            component: Component name
+            message: Log message
+            dataset_hash: Dataset hash
+            params_hash: Parameters hash
+            run_id: Run ID
+            **kwargs: Additional fields
+        """
+        entry = self._create_log_entry(
+            "WARNING", component, message, dataset_hash, params_hash, run_id, **kwargs
+        )
+        self.logger.warning(json.dumps(entry))
+    
+    def error(
+        self,
+        component: str,
+        message: str,
+        dataset_hash: Optional[str] = None,
+        params_hash: Optional[str] = None,
+        run_id: Optional[str] = None,
+        **kwargs
+    ):
+        """Log error message.
+        
+        Args:
+            component: Component name
+            message: Log message
+            dataset_hash: Dataset hash
+            params_hash: Parameters hash
+            run_id: Run ID
+            **kwargs: Additional fields
+        """
+        entry = self._create_log_entry(
+            "ERROR", component, message, dataset_hash, params_hash, run_id, **kwargs
+        )
+        self.logger.error(json.dumps(entry))
+    
+    def backtest_start(
+        self,
+        symbol: str,
+        timeframe: str,
+        strategy: str,
+        dataset_hash: str,
+        params_hash: str,
+        run_id: str
+    ):
+        """Log backtest start.
+        
+        Args:
+            symbol: Trading symbol
+            timeframe: Timeframe
+            strategy: Strategy name
+            dataset_hash: Dataset hash
+            params_hash: Parameters hash
+            run_id: Run ID
+        """
+        self.info(
+            "backtest",
+            f"Starting backtest for {symbol} {timeframe} with {strategy}",
+            dataset_hash=dataset_hash,
+            params_hash=params_hash,
+            run_id=run_id,
+            symbol=symbol,
+            timeframe=timeframe,
+            strategy=strategy
+        )
+    
+    def backtest_complete(
+        self,
+        symbol: str,
+        timeframe: str,
+        strategy: str,
+        dataset_hash: str,
+        params_hash: str,
+        run_id: str,
+        total_trades: int,
+        sharpe_ratio: float,
+        execution_time: float
+    ):
+        """Log backtest completion.
+        
+        Args:
+            symbol: Trading symbol
+            timeframe: Timeframe
+            strategy: Strategy name
+            dataset_hash: Dataset hash
+            params_hash: Parameters hash
+            run_id: Run ID
+            total_trades: Number of trades
+            sharpe_ratio: Sharpe ratio
+            execution_time: Execution time in seconds
+        """
+        self.info(
+            "backtest",
+            f"Backtest completed for {symbol} {timeframe} with {strategy}",
+            dataset_hash=dataset_hash,
+            params_hash=params_hash,
+            run_id=run_id,
+            symbol=symbol,
+            timeframe=timeframe,
+            strategy=strategy,
+            total_trades=total_trades,
+            sharpe_ratio=sharpe_ratio,
+            execution_time=execution_time
+        )
+    
+    def recommendation_generated(
+        self,
+        symbol: str,
+        date: str,
+        direction: str,
+        confidence: int,
+        dataset_hash: str,
+        params_hash: str,
+        run_id: str
+    ):
+        """Log recommendation generation.
+        
+        Args:
+            symbol: Trading symbol
+            date: Date
+            direction: Recommendation direction
+            confidence: Confidence level
+            dataset_hash: Dataset hash
+            params_hash: Parameters hash
+            run_id: Run ID
+        """
+        self.info(
+            "recommendation",
+            f"Generated {direction} recommendation for {symbol} on {date}",
+            dataset_hash=dataset_hash,
+            params_hash=params_hash,
+            run_id=run_id,
+            symbol=symbol,
+            date=date,
+            direction=direction,
+            confidence=confidence
+        )
+    
+    def job_start(self, job_name: str, run_id: str):
+        """Log job start.
+        
+        Args:
+            job_name: Job name
+            run_id: Run ID
+        """
+        self.info(
+            "scheduler",
+            f"Starting job {job_name}",
+            run_id=run_id,
+            job_name=job_name
+        )
+    
+    def job_complete(self, job_name: str, run_id: str, success: bool, duration: float):
+        """Log job completion.
+        
+        Args:
+            job_name: Job name
+            run_id: Run ID
+            success: Whether job was successful
+            duration: Job duration in seconds
+        """
+        level = "INFO" if success else "ERROR"
+        message = f"Job {job_name} completed successfully" if success else f"Job {job_name} failed"
+        
+        entry = self._create_log_entry(
+            level, "scheduler", message, run_id=run_id,
+            job_name=job_name, success=success, duration=duration
+        )
+        
+        if success:
+            self.logger.info(json.dumps(entry))
+        else:
+            self.logger.error(json.dumps(entry))
 
 
-# Global event logger
-event_logger = EventLogger()
+# Global structured logger instance
+structured_logger = StructuredLogger()
 
+
+def get_structured_logger() -> StructuredLogger:
+    """Get the global structured logger.
+    
+    Returns:
+        StructuredLogger instance
+    """
+    return structured_logger

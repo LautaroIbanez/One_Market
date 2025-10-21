@@ -73,21 +73,6 @@ class DailyRecommendationService:
                 )
             """)
             
-            # Create signals table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS signals (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    date TEXT NOT NULL,
-                    symbol TEXT NOT NULL,
-                    timeframe TEXT NOT NULL,
-                    strategy TEXT NOT NULL,
-                    direction INTEGER NOT NULL,
-                    strength REAL NOT NULL,
-                    components_json TEXT,
-                    created_at TEXT NOT NULL
-                )
-            """)
-            
             conn.commit()
     
     def get_daily_recommendation(
