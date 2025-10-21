@@ -21,6 +21,16 @@ from app.data.store import DataStore
 logger = logging.getLogger(__name__)
 
 
+class DataValidationStatus(BaseModel):
+    """Status of data validation for a timeframe."""
+    
+    timeframe: str
+    has_data: bool
+    num_bars: int = 0
+    reason: Optional[str] = None
+    is_sufficient: bool = False
+
+
 class StrategyDefinition(BaseModel):
     """Definition of a strategy for orchestration."""
     
@@ -153,13 +163,77 @@ class StrategyOrchestrator:
         
         return results
     
+    def validate_data_availability(
+        self,
+        symbol: str,
+        timeframes: List[str],
+        end_date: Optional[datetime] = None,
+        min_bars: int = 100
+    ) -> Dict[str, DataValidationStatus]:
+        """Validate data availability for multiple timeframes.
+        
+        Args:
+            symbol: Trading symbol
+            timeframes: List of timeframes to validate
+            end_date: End date for validation (default: now)
+            min_bars: Minimum number of bars required
+            
+        Returns:
+            Dictionary mapping timeframe to validation status
+        """
+        if end_date is None:
+            end_date = datetime.now()
+        
+        validation_results = {}
+        
+        for timeframe in timeframes:
+            try:
+                # Try to load data
+                df = self._load_data(symbol, timeframe, end_date)
+                
+                if df is None or len(df) == 0:
+                    validation_results[timeframe] = DataValidationStatus(
+                        timeframe=timeframe,
+                        has_data=False,
+                        num_bars=0,
+                        reason="No data available",
+                        is_sufficient=False
+                    )
+                elif len(df) < min_bars:
+                    validation_results[timeframe] = DataValidationStatus(
+                        timeframe=timeframe,
+                        has_data=True,
+                        num_bars=len(df),
+                        reason=f"Insufficient data: {len(df)} bars (minimum {min_bars})",
+                        is_sufficient=False
+                    )
+                else:
+                    validation_results[timeframe] = DataValidationStatus(
+                        timeframe=timeframe,
+                        has_data=True,
+                        num_bars=len(df),
+                        reason=None,
+                        is_sufficient=True
+                    )
+                    
+            except Exception as e:
+                validation_results[timeframe] = DataValidationStatus(
+                    timeframe=timeframe,
+                    has_data=False,
+                    num_bars=0,
+                    reason=f"Error loading data: {str(e)}",
+                    is_sufficient=False
+                )
+        
+        return validation_results
+    
     def run_multi_timeframe_backtests(
         self,
         symbol: str,
         timeframes: List[str],
         end_date: Optional[datetime] = None
     ) -> Dict[str, List[StrategyBacktestResult]]:
-        """Run backtests across multiple timeframes.
+        """Run backtests across multiple timeframes with validation.
         
         Args:
             symbol: Trading symbol
@@ -174,11 +248,22 @@ class StrategyOrchestrator:
         
         logger.info(f"Running multi-timeframe backtests for {symbol}")
         
+        # Validate data availability first
+        validation_results = self.validate_data_availability(symbol, timeframes, end_date)
+        
         all_results = {}
         
         for timeframe in timeframes:
+            validation = validation_results.get(timeframe)
+            
+            if not validation or not validation.is_sufficient:
+                reason = validation.reason if validation else "Unknown error"
+                logger.warning(f"⚠️ {timeframe}: Skipping - {reason}")
+                all_results[timeframe] = []
+                continue
+            
             try:
-                logger.info(f"Testing {symbol} on {timeframe}")
+                logger.info(f"Testing {symbol} on {timeframe} ({validation.num_bars} bars)")
                 results = self.run_all_backtests(symbol, timeframe, end_date)
                 
                 if results:
@@ -516,20 +601,33 @@ class StrategyOrchestrator:
         return composite
     
     def _calculate_metrics_from_trades(self, trades: List) -> Dict:
-        """Calculate performance metrics from trade list.
+        """Calculate performance metrics from trade list with normalization.
         
         Args:
-            trades: List of Trade objects from BacktestEngine
+            trades: List of Trade objects or dicts from BacktestEngine
             
         Returns:
-            Dictionary with calculated metrics
+            Dictionary with calculated metrics (all fields guaranteed)
         """
         if not trades:
-            return self._empty_metrics()
+            return self._get_complete_empty_metrics()
         
-        # Extract PnL series
-        pnls = [t.pnl for t in trades] if trades and hasattr(trades[0], 'pnl') else []
-        pnl_pcts = [t.pnl_pct for t in trades] if trades and hasattr(trades[0], 'pnl_pct') else []
+        # Normalize trades to dict format
+        normalized_trades = []
+        for t in trades:
+            if isinstance(t, dict):
+                normalized_trades.append(t)
+            else:
+                # Convert object to dict
+                trade_dict = {
+                    'pnl': getattr(t, 'pnl', 0.0),
+                    'pnl_pct': getattr(t, 'pnl_pct', 0.0)
+                }
+                normalized_trades.append(trade_dict)
+        
+        # Extract PnL series with safe defaults
+        pnls = [t.get('pnl', 0.0) if isinstance(t, dict) else getattr(t, 'pnl', 0.0) for t in normalized_trades]
+        pnl_pcts = [t.get('pnl_pct', 0.0) if isinstance(t, dict) else getattr(t, 'pnl_pct', 0.0) for t in normalized_trades]
         
         # Calculate equity curve
         equity = self.capital
@@ -594,7 +692,7 @@ class StrategyOrchestrator:
         }
     
     def _empty_metrics(self) -> Dict:
-        """Return empty metrics dict."""
+        """Return empty metrics dict (basic fields)."""
         return {
             'total_return': 0.0,
             'cagr': 0.0,
@@ -606,6 +704,29 @@ class StrategyOrchestrator:
             'win_rate': 0.0,
             'profit_factor': 0.0,
             'expectancy': 0.0
+        }
+    
+    def _get_complete_empty_metrics(self) -> Dict:
+        """Return complete empty metrics dict with all required fields."""
+        return {
+            'total_return': 0.0,
+            'cagr': 0.0,
+            'sharpe_ratio': 0.0,
+            'sortino_ratio': 0.0,
+            'max_drawdown': 0.0,
+            'volatility': 0.0,
+            'calmar_ratio': 0.0,
+            'win_rate': 0.0,
+            'profit_factor': 0.0,
+            'expectancy': 0.0,
+            'total_trades': 0,
+            'winning_trades': 0,
+            'losing_trades': 0,
+            'avg_win': 0.0,
+            'avg_loss': 0.0,
+            'capital': self.capital,
+            'risk_pct': self.max_risk_pct,
+            'lookback_days': self.lookback_days
         }
     
     def get_best_strategy(

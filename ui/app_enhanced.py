@@ -216,9 +216,9 @@ def compare_all_strategies(symbol: str, timeframe: str, capital: float):
 
 @st.cache_data(ttl=600)
 def compare_multi_timeframe_strategies(symbol: str, capital: float):
-    """Compare strategies across multiple timeframes with global ranking."""
+    """Compare strategies across multiple timeframes with global ranking and progress indicators."""
     try:
-        from app.service.strategy_orchestrator import StrategyOrchestrator
+        from app.service.strategy_orchestrator import StrategyOrchestrator, DataValidationStatus
         from app.service.global_ranking import GlobalRankingService
         from app.config.settings import settings
         
@@ -232,26 +232,75 @@ def compare_multi_timeframe_strategies(symbol: str, capital: float):
             lookback_days=90
         )
         
-        # Run multi-timeframe backtests
-        st.info(f"🔄 Ejecutando backtests multi-timeframe para {symbol}...")
+        # Phase 1: Validate data availability
+        st.info("📊 Fase 1/4: Validando disponibilidad de datos...")
+        validation_results = orchestrator.validate_data_availability(symbol, timeframes)
+        
+        # Show validation results
+        validation_summary = []
+        for tf, status in validation_results.items():
+            if status.is_sufficient:
+                validation_summary.append(f"✅ {tf}: {status.num_bars} velas disponibles")
+            else:
+                validation_summary.append(f"❌ {tf}: {status.reason}")
+        
+        with st.expander("Ver resultados de validación", expanded=False):
+            for msg in validation_summary:
+                st.text(msg)
+        
+        # Phase 2: Run multi-timeframe backtests
+        st.info("🔄 Fase 2/4: Ejecutando backtests multi-timeframe...")
         multi_results = orchestrator.run_multi_timeframe_backtests(symbol, timeframes)
         
-        # Run strategy combinations
-        st.info(f"🔄 Ejecutando combinaciones de estrategias...")
+        # Show backtest progress
+        backtest_summary = []
+        for tf, results in multi_results.items():
+            if results:
+                backtest_summary.append(f"✅ {tf}: {len(results)} estrategias testeadas")
+            else:
+                backtest_summary.append(f"⚠️ {tf}: Sin resultados")
+        
+        with st.expander("Ver resultados de backtests", expanded=False):
+            for msg in backtest_summary:
+                st.text(msg)
+        
+        # Phase 3: Run strategy combinations
+        st.info("🔗 Fase 3/4: Ejecutando combinaciones de estrategias...")
         combination_results = {}
+        combination_summary = []
+        
         for tf in timeframes:
             try:
+                if not multi_results.get(tf):
+                    combination_summary.append(f"⏭️ {tf}: Saltado (sin backtests)")
+                    continue
+                    
                 combo_results = orchestrator.run_strategy_combinations(symbol, tf)
                 if combo_results:
                     combination_results[tf] = combo_results
-                    st.success(f"✅ {tf}: {len(combo_results)} combinaciones analizadas")
+                    combination_summary.append(f"✅ {tf}: {len(combo_results)} combinaciones analizadas")
+                else:
+                    combination_summary.append(f"⚠️ {tf}: Sin combinaciones")
             except Exception as e:
-                st.warning(f"⚠️ {tf}: Error en combinaciones: {e}")
+                combination_summary.append(f"❌ {tf}: Error - {str(e)[:50]}")
         
-        # Calculate global ranking
-        st.info(f"🔄 Calculando ranking global...")
+        with st.expander("Ver resultados de combinaciones", expanded=False):
+            for msg in combination_summary:
+                st.text(msg)
+        
+        # Phase 4: Calculate global ranking
+        st.info("🏆 Fase 4/4: Calculando ranking global...")
         ranking_service = GlobalRankingService()
-        ranked_strategies = ranking_service.rank_strategies(multi_results, combination_results)
+        
+        # Filter out timeframes without results
+        filtered_multi_results = {tf: results for tf, results in multi_results.items() if results}
+        filtered_combination_results = {tf: results for tf, results in combination_results.items() if results}
+        
+        if not filtered_multi_results:
+            st.error("❌ No hay resultados de backtests para ningún timeframe")
+            return {}
+        
+        ranked_strategies = ranking_service.rank_strategies(filtered_multi_results, filtered_combination_results if filtered_combination_results else None)
         
         # Convert to DataFrame format for display
         all_results = {}
@@ -1011,7 +1060,7 @@ with tab2:
             comparison_df = multi_results.get('Global', pd.DataFrame())  # Use global ranking as main comparison
         else:
             st.warning("⚠️ No se pudieron obtener resultados multi-timeframe")
-    comparison_df = compare_all_strategies(symbol, timeframe, capital)
+            comparison_df = compare_all_strategies(symbol, timeframe, capital)
     
     if not comparison_df.empty:
         # Summary metrics
