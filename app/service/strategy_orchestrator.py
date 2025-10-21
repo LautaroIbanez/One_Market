@@ -458,46 +458,37 @@ class StrategyOrchestrator:
             )
             
             engine = BacktestEngine(config)
-            trades = engine.run(df, signals.signal)
+            backtest_result = engine.run(df, signals.signal, strategy_def.name, verbose=True)
             
-            if not trades:
+            if not backtest_result or backtest_result.total_trades == 0:
+                logger.warning(f"No trades for {strategy_def.name}")
                 return None
             
-            # Calculate metrics from trades
-            metrics = self._calculate_metrics_from_trades(trades)
-            
-            # Extract key statistics
-            winning_trades = [t for t in trades if t.pnl > 0] if trades and hasattr(trades[0], 'pnl') else [] if hasattr(trades[0], 'pnl') else []
-            losing_trades = [t for t in trades if t.pnl <= 0] if hasattr(trades[0], 'pnl') else []
-            
-            avg_win = np.mean([t.pnl for t in winning_trades]) if winning_trades else 0
-            avg_loss = np.mean([t.pnl for t in losing_trades]) if losing_trades else 0
-            
-            # Create result
+            # Create StrategyBacktestResult from BacktestResult
             result = StrategyBacktestResult(
                 strategy_name=strategy_def.name,
                 timestamp=datetime.now(),
                 
-                # Performance
-                total_return=metrics['total_return'],
-                cagr=metrics['cagr'],
-                sharpe_ratio=metrics['sharpe_ratio'],
-                max_drawdown=metrics['max_drawdown'],
-                win_rate=metrics['win_rate'],
-                profit_factor=metrics['profit_factor'],
-                expectancy=metrics['expectancy'],
+                # Performance (from BacktestResult)
+                total_return=backtest_result.total_return,
+                cagr=backtest_result.cagr,
+                sharpe_ratio=backtest_result.sharpe_ratio,
+                max_drawdown=backtest_result.max_drawdown,
+                win_rate=backtest_result.win_rate,
+                profit_factor=backtest_result.profit_factor,
+                expectancy=backtest_result.expectancy,
                 
-                # Risk
-                volatility=metrics['volatility'],
-                calmar_ratio=metrics['calmar_ratio'],
-                sortino_ratio=metrics['sortino_ratio'],
+                # Risk (from BacktestResult)
+                volatility=backtest_result.volatility,
+                calmar_ratio=backtest_result.calmar_ratio,
+                sortino_ratio=backtest_result.sortino_ratio,
                 
-                # Trade stats
-                total_trades=len(trades),
-                winning_trades=len(winning_trades),
-                losing_trades=len(losing_trades),
-                avg_win=avg_win,
-                avg_loss=avg_loss,
+                # Trade stats (from BacktestResult)
+                total_trades=backtest_result.total_trades,
+                winning_trades=backtest_result.winning_trades,
+                losing_trades=backtest_result.losing_trades,
+                avg_win=backtest_result.avg_win,
+                avg_loss=backtest_result.avg_loss,
                 
                 # Config
                 capital=self.capital,

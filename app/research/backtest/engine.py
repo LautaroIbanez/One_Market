@@ -10,7 +10,7 @@ This module provides the main backtesting engine with support for:
 """
 import pandas as pd
 import numpy as np
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from datetime import datetime
 from pydantic import BaseModel, Field
 import warnings
@@ -99,6 +99,9 @@ class BacktestResult(BaseModel):
     end_date: datetime = Field(..., description="Backtest end date")
     initial_capital: float = Field(..., description="Initial capital")
     final_capital: float = Field(..., description="Final capital")
+    
+    # Detailed trades list
+    trades: List[Dict] = Field(default_factory=list, description="Detailed list of all trades executed")
     
     class Config:
         arbitrary_types_allowed = True
@@ -515,16 +518,23 @@ class BacktestEngine:
                 slippage = abs(position * price * self.config.slippage)
                 net_pnl = pnl - commission - slippage
                 
+                # Calculate holding time
+                holding_time = (timestamp - entry_time).total_seconds() / 3600 if isinstance(timestamp, datetime) and isinstance(entry_time, datetime) else 0
+                
                 trades.append({
                     'entry_time': entry_time,
                     'exit_time': timestamp,
                     'entry_price': entry_price,
                     'exit_price': price,
                     'quantity': position,
+                    'side': 'LONG',  # Simplified for fallback
                     'pnl': net_pnl,
                     'pnl_pct': pnl_pct,
+                    'pnl_gross': pnl,
                     'commission': commission,
-                    'slippage': slippage
+                    'slippage': slippage,
+                    'holding_time_hours': holding_time,
+                    'status': 'CLOSED'
                 })
                 
                 capital += net_pnl

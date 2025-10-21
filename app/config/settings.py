@@ -49,22 +49,28 @@ class Settings(BaseSettings):
     # Timeframe configuration for homogeneous data loading
     TIMEFRAME_CANDLE_TARGETS: Dict[str, int] = Field(
         default={
-            "1m": 10080,    # ~1 week
-            "5m": 2016,     # ~1 week  
-            "15m": 672,     # ~1 week
-            "1h": 168,      # ~1 week
-            "4h": 42,       # ~1 week
-            "12h": 14,      # ~1 week
+            "1m": 1440,     # ~1 day (minimum for intraday)
+            "15m": 672,     # ~1 week (96 per day * 7)
+            "1h": 720,      # ~30 days (24 per day * 30)
+            "4h": 180,      # ~30 days (6 per day * 30)
+            "12h": 60,      # ~30 days (2 per day * 30)
             "1d": 365,      # ~1 year
-            "1w": 52,       # ~1 year
+            "1w": 104,      # ~2 years (52 per year * 2)
+            "1M": 36,       # ~3 years (12 per year * 3)
         },
-        description="Target number of candles per timeframe for homogeneous comparison"
+        description="Target number of candles per timeframe for homogeneous comparison (realistic minimums)"
     )
     
-    # Target timeframes for multi-timeframe analysis
+    # Target timeframes for multi-timeframe analysis (removed 5m)
     TARGET_TIMEFRAMES: List[str] = Field(
-        default=["1d", "12h", "4h", "1h", "15m", "5m"],
+        default=["1d", "12h", "4h", "1h", "15m"],
         description="Timeframes to analyze in multi-timeframe mode"
+    )
+    
+    # Minimum bars required for backtesting
+    MIN_BARS_FOR_BACKTEST: int = Field(
+        default=100,
+        description="Minimum number of bars required to run a backtest"
     )
     
     # Ranking weights for global strategy ranking
