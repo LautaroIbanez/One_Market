@@ -176,9 +176,42 @@ def create_fallback_recommendation(symbol: str, timeframe: str, capital: float):
 
 @st.cache_data(ttl=600)
 def compare_all_strategies(symbol: str, timeframe: str, capital: float):
-    """Compare all strategies performance."""
-    # Always use fallback for now to avoid backtesting errors
-    return create_fallback_comparison(symbol, timeframe, capital)
+    """Compare all strategies performance using real backtest results."""
+    try:
+        from app.service.strategy_orchestrator import StrategyOrchestrator
+        from app.utils.metrics_helper import create_enhanced_comparison_dataframe
+        
+        # Initialize orchestrator for real backtests
+        orchestrator = StrategyOrchestrator(
+            capital=capital,
+            max_risk_pct=0.02,
+            lookback_days=90
+        )
+        
+        # Run real backtests
+        st.info(f"🔄 Ejecutando backtests reales para {symbol} {timeframe}...")
+        results = orchestrator.run_all_backtests(symbol, timeframe)
+        
+        if results:
+            # Create enhanced comparison DataFrame
+            comparison_df = create_enhanced_comparison_dataframe(results)
+            
+            if not comparison_df.empty:
+                st.success(f"✅ Backtests completados: {len(results)} estrategias analizadas")
+                return comparison_df
+            else:
+                st.warning(f"⚠️ No se pudieron procesar los resultados de backtest para {symbol} {timeframe}")
+                return create_fallback_comparison(symbol, timeframe, capital)
+        else:
+            # No results from backtests
+            st.warning(f"⚠️ No hay resultados de backtest recientes para {symbol} {timeframe}")
+            return create_fallback_comparison(symbol, timeframe, capital)
+            
+    except Exception as e:
+        st.error(f"❌ Error al ejecutar backtests reales: {e}")
+        st.info("🔄 Usando datos simulados como fallback...")
+        # Fallback to simulated data
+        return create_fallback_comparison(symbol, timeframe, capital)
 
 
 def create_price_chart_with_levels(symbol: str, timeframe: str, recommendation):
