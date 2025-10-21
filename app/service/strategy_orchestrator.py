@@ -35,6 +35,7 @@ class StrategyBacktestResult(BaseModel):
     
     strategy_name: str
     timestamp: datetime
+    timeframe: Optional[str] = None  # Added for multi-timeframe support
     
     # Performance metrics
     total_return: float
@@ -152,15 +153,184 @@ class StrategyOrchestrator:
         
         return results
     
+    def run_multi_timeframe_backtests(
+        self,
+        symbol: str,
+        timeframes: List[str],
+        end_date: Optional[datetime] = None
+    ) -> Dict[str, List[StrategyBacktestResult]]:
+        """Run backtests across multiple timeframes.
+        
+        Args:
+            symbol: Trading symbol
+            timeframes: List of timeframes to test
+            end_date: End date for backtest (default: now)
+            
+        Returns:
+            Dictionary mapping timeframe to list of results
+        """
+        if end_date is None:
+            end_date = datetime.now()
+        
+        logger.info(f"Running multi-timeframe backtests for {symbol}")
+        
+        all_results = {}
+        
+        for timeframe in timeframes:
+            try:
+                logger.info(f"Testing {symbol} on {timeframe}")
+                results = self.run_all_backtests(symbol, timeframe, end_date)
+                
+                if results:
+                    # Add timeframe to each result
+                    for result in results:
+                        result.timeframe = timeframe
+                    
+                    all_results[timeframe] = results
+                    logger.info(f"✅ {timeframe}: {len(results)} strategies tested")
+                else:
+                    logger.warning(f"⚠️ {timeframe}: No results")
+                    all_results[timeframe] = []
+                    
+            except Exception as e:
+                logger.error(f"❌ {timeframe}: {e}")
+                all_results[timeframe] = []
+        
+        return all_results
+    
+    def generate_strategy_combinations(self, k_min: int = 2) -> List[Tuple[str, callable]]:
+        """Generate strategy combinations for testing.
+        
+        Args:
+            k_min: Minimum number of strategies in combination
+            
+        Returns:
+            List of (name, callable) tuples for combinations
+        """
+        import itertools
+        from app.research.signals import combine_signals
+        
+        combinations = []
+        
+        # Get all enabled strategies
+        enabled_strategies = [s for s in self.STRATEGY_REGISTRY if s.enabled]
+        
+        # Generate combinations of size k_min and higher
+        for k in range(k_min, len(enabled_strategies) + 1):
+            for combo in itertools.combinations(enabled_strategies, k):
+                # Create combination name
+                combo_name = " + ".join([s.name for s in combo])
+                
+                # Create combination function
+                def create_combo_func(strategies):
+                    def combo_func(close_prices):
+                        signals = []
+                        for strategy in strategies:
+                            try:
+                                signal_func = getattr(__import__('app.research.signals', fromlist=[strategy.func_name]), strategy.func_name)
+                                signal_output = signal_func(close_prices, **strategy.params)
+                                signals.append(signal_output.signal)
+                            except Exception as e:
+                                logger.warning(f"Failed to load {strategy.func_name}: {e}")
+                                continue
+                        
+                        if signals:
+                            return combine_signals(signals, method="consensus")
+                        else:
+                            return None
+                    
+                    return combo_func
+                
+                combinations.append((combo_name, create_combo_func(combo)))
+        
+        return combinations
+    
+    def run_strategy_combinations(
+        self,
+        symbol: str,
+        timeframe: str,
+        end_date: Optional[datetime] = None
+    ) -> List[StrategyBacktestResult]:
+        """Run backtests for strategy combinations.
+        
+        Args:
+            symbol: Trading symbol
+            timeframe: Timeframe to test
+            end_date: End date for backtest (default: now)
+            
+        Returns:
+            List of backtest results for combinations
+        """
+        if end_date is None:
+            end_date = datetime.now()
+        
+        logger.info(f"Running strategy combinations for {symbol} {timeframe}")
+        
+        # Load data
+        df = self._load_data(symbol, timeframe, end_date)
+        if df is None or len(df) < 100:
+            logger.warning(f"Insufficient data for {symbol} {timeframe}")
+            return []
+        
+        # Generate combinations
+        combinations = self.generate_strategy_combinations(k_min=2)
+        
+        results = []
+        
+        for combo_name, combo_func in combinations:
+            try:
+                # Generate signals for combination
+                signal_output = combo_func(df['close'])
+                if signal_output is None:
+                    continue
+                
+                # Run backtest
+                config = BacktestConfig(
+                    initial_capital=self.capital,
+                    risk_per_trade=self.max_risk_pct,
+                    commission=0.001,
+                    slippage=0.0005
+                )
+                
+                engine = BacktestEngine(config)
+                trades = engine.run(df, signal_output.signal, combo_name, verbose=False)
+                
+                if not trades:
+                    continue
+                
+                # Calculate metrics from trades
+                metrics = self._calculate_metrics_from_trades(trades)
+                
+                result = StrategyBacktestResult(
+                    strategy_name=combo_name,
+                    timestamp=end_date,
+                    timeframe=timeframe,
+                    **metrics
+                )
+                
+                results.append(result)
+                logger.info(f"✅ {combo_name}: Sharpe={result.sharpe_ratio:.2f}, WR={result.win_rate:.1%}")
+                
+            except Exception as e:
+                logger.error(f"Failed to backtest combination {combo_name}: {e}")
+                continue
+        
+        return results
+    
     def _load_data(
         self,
         symbol: str,
         timeframe: str,
         end_date: datetime
     ) -> Optional[pd.DataFrame]:
-        """Load historical data for backtesting."""
+        """Load historical data for backtesting with homogeneous candle counts."""
         try:
-            bars = self.store.read_bars(symbol, timeframe)
+            from app.config.settings import settings
+            
+            # Get target number of candles for this timeframe
+            max_bars = settings.TIMEFRAME_CANDLE_TARGETS.get(timeframe, 365)
+            
+            bars = self.store.read_bars(symbol, timeframe, max_bars=max_bars)
             
             if not bars:
                 return None
@@ -168,7 +338,7 @@ class StrategyOrchestrator:
             df = pd.DataFrame([bar.to_dict() for bar in bars])
             df = df.sort_values('timestamp').reset_index(drop=True)
             
-            # Filter by date range
+            # Filter by date range (if needed)
             end_timestamp = int(end_date.timestamp() * 1000)
             start_timestamp = int((end_date - timedelta(days=self.lookback_days)).timestamp() * 1000)
             

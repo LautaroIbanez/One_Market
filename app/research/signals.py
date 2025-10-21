@@ -6,7 +6,7 @@ and output normalized signals.
 """
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, Optional, Literal
+from typing import Dict, Any, Optional, Literal, List
 from pydantic import BaseModel, Field
 from app.research.indicators import (
     sma, ema, rsi, atr, adx, donchian_channels, macd, validate_series
@@ -584,6 +584,76 @@ def ema_triple_momentum(close: pd.Series, fast_period: int = 8, mid_period: int 
     rsi_strength = (rsi_val - 50) / 50
     strength = (fast_mid_dist + mid_slow_dist + rsi_strength) * 10
     return SignalOutput(signal=signal, strength=strength, metadata={"strategy": "ema_triple_momentum", "fast_period": fast_period, "mid_period": mid_period, "slow_period": slow_period, "rsi_period": rsi_period, "rsi_bull_threshold": rsi_bull_threshold, "rsi_bear_threshold": rsi_bear_threshold})
+
+
+def combine_signals(signals_list: List[pd.Series], method: str = "consensus") -> SignalOutput:
+    """Combine multiple signals into a single signal.
+    
+    Args:
+        signals_list: List of signal series
+        method: Combination method ("consensus", "average", "majority")
+        
+    Returns:
+        Combined signal output
+    """
+    if not signals_list:
+        return SignalOutput(signal=pd.Series([0]), metadata={"method": method})
+    
+    # Align all signals to the same length
+    min_length = min(len(s) for s in signals_list)
+    aligned_signals = [s.iloc[:min_length] for s in signals_list]
+    
+    if method == "consensus":
+        # Consensus: all signals must agree
+        combined_signal = pd.Series([0] * min_length)
+        for i in range(min_length):
+            values = [s.iloc[i] for s in aligned_signals]
+            if all(v == 1 for v in values):
+                combined_signal.iloc[i] = 1
+            elif all(v == -1 for v in values):
+                combined_signal.iloc[i] = -1
+            else:
+                combined_signal.iloc[i] = 0
+    
+    elif method == "average":
+        # Average: take the mean of all signals
+        combined_signal = pd.Series([0.0] * min_length)
+        for i in range(min_length):
+            values = [s.iloc[i] for s in aligned_signals]
+            avg = sum(values) / len(values)
+            if avg > 0.5:
+                combined_signal.iloc[i] = 1
+            elif avg < -0.5:
+                combined_signal.iloc[i] = -1
+            else:
+                combined_signal.iloc[i] = 0
+    
+    elif method == "majority":
+        # Majority vote
+        combined_signal = pd.Series([0] * min_length)
+        for i in range(min_length):
+            values = [s.iloc[i] for s in aligned_signals]
+            positive_count = sum(1 for v in values if v > 0)
+            negative_count = sum(1 for v in values if v < 0)
+            
+            if positive_count > negative_count:
+                combined_signal.iloc[i] = 1
+            elif negative_count > positive_count:
+                combined_signal.iloc[i] = -1
+            else:
+                combined_signal.iloc[i] = 0
+    
+    else:
+        raise ValueError(f"Unknown combination method: {method}")
+    
+    return SignalOutput(
+        signal=combined_signal,
+        metadata={
+            "method": method,
+            "num_signals": len(signals_list),
+            "combination": True
+        }
+    )
 
 
 def get_strategy_list() -> list[str]:

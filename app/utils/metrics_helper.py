@@ -54,6 +54,11 @@ class MetricsCalculator:
         total_return = (equity_series.iloc[-1] - initial_capital) / initial_capital
         
         # Time-based calculations
+        if isinstance(start_date, int):
+            start_date = datetime.fromtimestamp(start_date / 1000)
+        if isinstance(end_date, int):
+            end_date = datetime.fromtimestamp(end_date / 1000)
+        
         days = (end_date - start_date).days
         years = days / 365.25 if days > 0 else 1
         

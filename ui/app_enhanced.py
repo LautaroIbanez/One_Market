@@ -214,6 +214,135 @@ def compare_all_strategies(symbol: str, timeframe: str, capital: float):
         return create_fallback_comparison(symbol, timeframe, capital)
 
 
+@st.cache_data(ttl=600)
+def compare_multi_timeframe_strategies(symbol: str, capital: float):
+    """Compare strategies across multiple timeframes with global ranking."""
+    try:
+        from app.service.strategy_orchestrator import StrategyOrchestrator
+        from app.service.global_ranking import GlobalRankingService
+        from app.config.settings import settings
+        
+        # Get target timeframes from settings
+        timeframes = settings.TARGET_TIMEFRAMES
+        
+        # Initialize orchestrator
+        orchestrator = StrategyOrchestrator(
+            capital=capital,
+            max_risk_pct=0.02,
+            lookback_days=90
+        )
+        
+        # Run multi-timeframe backtests
+        st.info(f"🔄 Ejecutando backtests multi-timeframe para {symbol}...")
+        multi_results = orchestrator.run_multi_timeframe_backtests(symbol, timeframes)
+        
+        # Run strategy combinations
+        st.info(f"🔄 Ejecutando combinaciones de estrategias...")
+        combination_results = {}
+        for tf in timeframes:
+            try:
+                combo_results = orchestrator.run_strategy_combinations(symbol, tf)
+                if combo_results:
+                    combination_results[tf] = combo_results
+                    st.success(f"✅ {tf}: {len(combo_results)} combinaciones analizadas")
+            except Exception as e:
+                st.warning(f"⚠️ {tf}: Error en combinaciones: {e}")
+        
+        # Calculate global ranking
+        st.info(f"🔄 Calculando ranking global...")
+        ranking_service = GlobalRankingService()
+        ranked_strategies = ranking_service.rank_strategies(multi_results, combination_results)
+        
+        # Convert to DataFrame format for display
+        all_results = {}
+        
+        # Individual strategies by timeframe
+        for tf, results in multi_results.items():
+            if results:
+                from app.utils.metrics_helper import create_enhanced_comparison_dataframe
+                comparison_df = create_enhanced_comparison_dataframe(results)
+                if not comparison_df.empty:
+                    comparison_df['Timeframe'] = tf
+                    comparison_df['Type'] = 'Individual'
+                    all_results[tf] = comparison_df
+        
+        # Add global ranking
+        if ranked_strategies:
+            global_df = pd.DataFrame([{
+                'Strategy': s.strategy_name,
+                'Type': 'Combination' if s.is_combination else 'Individual',
+                'Global Score': s.global_score,
+                'Global Rank': s.global_rank,
+                'Best Sharpe': s.best_sharpe,
+                'Best Win Rate': s.best_win_rate,
+                'Best CAGR': s.best_cagr,
+                'Best Profit Factor': s.best_profit_factor,
+                'Best Expectancy': s.best_expectancy,
+                'Worst Max DD': s.worst_max_dd,
+                'Sharpe Consistency': s.sharpe_consistency,
+                'Win Rate Consistency': s.win_rate_consistency,
+                'CAGR Consistency': s.cagr_consistency
+            } for s in ranked_strategies])
+            
+            all_results['Global'] = global_df
+        
+        return all_results
+        
+    except Exception as e:
+        st.error(f"❌ Error en comparación multi-timeframe: {e}")
+        return {}
+
+
+@st.cache_data(ttl=600)
+def get_asset_metrics(symbol: str, timeframes: list):
+    """Get basic asset metrics for context."""
+    try:
+        from app.data.store import DataStore
+        
+        store = DataStore()
+        asset_metrics = {}
+        
+        for tf in timeframes:
+            try:
+                bars = store.read_bars(symbol, tf)
+                if not bars or len(bars) < 50:
+                    continue
+                
+                # Convert to DataFrame
+                df = pd.DataFrame([bar.to_dict() for bar in bars])
+                df = df.sort_values('timestamp').reset_index(drop=True)
+                
+                # Calculate basic metrics
+                returns = df['close'].pct_change().dropna()
+                
+                if len(returns) > 0:
+                    total_return = (df['close'].iloc[-1] / df['close'].iloc[0]) - 1
+                    volatility = returns.std() * np.sqrt(252)  # Annualized
+                    
+                    # Calculate max drawdown
+                    cumulative = (1 + returns).cumprod()
+                    running_max = cumulative.expanding().max()
+                    drawdown = (cumulative - running_max) / running_max
+                    max_drawdown = drawdown.min()
+                    
+                    asset_metrics[tf] = {
+                        'Total Return': total_return,
+                        'Volatility': volatility,
+                        'Max Drawdown': max_drawdown,
+                        'Data Points': len(df)
+                    }
+                    
+            except Exception as e:
+                st.warning(f"⚠️ Error calculando métricas de {symbol} {tf}: {e}")
+                continue
+        
+        return asset_metrics
+        
+    except Exception as e:
+        st.error(f"❌ Error obteniendo métricas del activo: {e}")
+        return {}
+
+
 def create_price_chart_with_levels(symbol: str, timeframe: str, recommendation):
     """Create a price chart with entry, SL, and TP levels."""
     try:
@@ -484,12 +613,13 @@ def create_strategy_performance_chart(trades_df):
 
 
 def create_fallback_comparison(symbol: str, timeframe: str, capital: float):
-    """Create a fallback comparison when auto-comparison fails."""
+    """Create a fallback comparison with consistent metrics calculation."""
     try:
         from app.research.signals import (
             ma_crossover, rsi_regime_pullback, trend_following_ema,
             donchian_breakout_adx, macd_histogram_atr_filter, mean_reversion
         )
+        from app.utils.metrics_helper import MetricsCalculator
         
         # Load data
         store = DataStore()
@@ -524,32 +654,83 @@ def create_fallback_comparison(symbol: str, timeframe: str, capital: float):
         ]
         
         comparison_data = []
+        calculator = MetricsCalculator()
+        
         for name, func in strategies:
             try:
                 signal_output = func(df['close'])
-                # Simple performance calculation
-                returns = df['close'].pct_change()
-                strategy_returns = signal_output.signal.shift(1) * returns
                 
-                total_return = (1 + strategy_returns).prod() - 1
-                sharpe = (strategy_returns.mean() / strategy_returns.std() * np.sqrt(252)) if strategy_returns.std() > 0 else 0
+                # Simulate realistic trades based on signals
+                trades = []
+                equity_curve = [capital]
+                current_equity = capital
+                position = 0
+                entry_price = 0
                 
-                # Calculate additional metrics
-                trades = len(signal_output.signal[signal_output.signal != 0])
-                win_rate = 0.45 + (sharpe * 0.05) if sharpe > 0 else 0.45  # Dynamic win rate
-                max_dd = -0.10 - (abs(sharpe) * 0.05) if sharpe < 0 else -0.10  # Dynamic max DD
-                profit_factor = 1.0 + (sharpe * 0.2) if sharpe > 0 else 1.0  # Dynamic profit factor
+                for i, (timestamp, row) in enumerate(df.iterrows()):
+                    signal = signal_output.signal.iloc[i] if i < len(signal_output.signal) else 0
+                    price = row['close']
+                    
+                    # Entry logic
+                    if signal != 0 and position == 0:
+                        # Calculate position size based on risk
+                        risk_amount = current_equity * 0.02  # 2% risk
+                        position_size = risk_amount / price
+                        position = position_size
+                        entry_price = price
+                    
+                    # Exit logic
+                    elif position != 0 and signal == 0:
+                        # Calculate PnL
+                        pnl = (price - entry_price) * position
+                        pnl_pct = pnl / (entry_price * position) if position > 0 else 0
+                        
+                        # Apply commission
+                        commission = abs(position * price * 0.001)  # 0.1% commission
+                        net_pnl = pnl - commission
+                        
+                        trades.append({
+                            'pnl': net_pnl,
+                            'pnl_pct': pnl_pct
+                        })
+                        
+                        current_equity += net_pnl
+                        equity_curve.append(current_equity)
+                        position = 0
+                        entry_price = 0
+                
+                # Calculate comprehensive metrics
+                if trades:
+                    metrics = calculator.calculate_comprehensive_metrics(
+                        trades=trades,
+                        equity_curve=equity_curve,
+                        initial_capital=capital,
+                        start_date=df.index[0],
+                        end_date=df.index[-1]
+                    )
+                else:
+                    # No trades - use default metrics
+                    metrics = {
+                        'cagr': 0.0,
+                        'sharpe_ratio': 0.0,
+                        'win_rate': 0.5,
+                        'max_drawdown': -0.1,
+                        'profit_factor': 1.0,
+                        'expectancy': 0.0,
+                        'total_trades': 0
+                    }
                 
                 comparison_data.append({
                     'Strategy': name,
-                    'CAGR': total_return * 100,
-                    'Sharpe': sharpe,
-                    'Win Rate': win_rate,
-                    'Max DD': max_dd,
-                    'Profit Factor': profit_factor,
-                    'Expectancy': 25.0 + (sharpe * 10),  # Dynamic expectancy
-                    'Trades': trades
+                    'CAGR': metrics['cagr'],
+                    'Sharpe': metrics['sharpe_ratio'],
+                    'Win Rate': metrics['win_rate'],
+                    'Max DD': metrics['max_drawdown'],
+                    'Profit Factor': metrics['profit_factor'],
+                    'Expectancy': metrics['expectancy'],
+                    'Trades': metrics['total_trades']
                 })
+                
             except Exception as e:
                 # Add strategy with default values if it fails
                 comparison_data.append({
@@ -745,6 +926,91 @@ with tab2:
     st.markdown("---")
     st.header("📊 Comparación de Estrategias")
     
+    # Add multi-timeframe option
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        analysis_mode = st.radio(
+            "Modo de Análisis",
+            ["Single Timeframe", "Multi-Timeframe"],
+            horizontal=True
+        )
+    
+    with col2:
+        if analysis_mode == "Multi-Timeframe":
+            if st.button("🔄 Ejecutar Análisis Multi-Timeframe", type="primary"):
+                st.cache_data.clear()
+                st.rerun()
+    
+    if analysis_mode == "Single Timeframe":
+        comparison_df = compare_all_strategies(symbol, timeframe, capital)
+    else:
+        # Multi-timeframe analysis
+        st.info("🔄 Ejecutando análisis multi-timeframe...")
+        multi_results = compare_multi_timeframe_strategies(symbol, capital)
+        
+        if multi_results:
+            # Show global ranking first
+            if 'Global' in multi_results:
+                st.subheader("🏆 Ranking Global de Estrategias")
+                global_df = multi_results['Global']
+                
+                # Show top 10
+                top_10 = global_df.head(10)
+                st.dataframe(top_10, use_container_width=True)
+                
+                # Show breakdown by type
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.subheader("📊 Top Estrategias Individuales")
+                    individual = global_df[global_df['Type'] == 'Individual'].head(5)
+                    st.dataframe(individual[['Strategy', 'Global Score', 'Best Sharpe', 'Best Win Rate']], use_container_width=True)
+                
+                with col2:
+                    st.subheader("🔗 Top Combinaciones")
+                    combinations = global_df[global_df['Type'] == 'Combination'].head(5)
+                    st.dataframe(combinations[['Strategy', 'Global Score', 'Best Sharpe', 'Best Win Rate']], use_container_width=True)
+            
+            # Show asset metrics for context
+            st.subheader("📈 Métricas del Activo")
+            asset_metrics = get_asset_metrics(symbol, [k for k in multi_results.keys() if k != 'Global'])
+            
+            if asset_metrics:
+                asset_df = pd.DataFrame(asset_metrics).T
+                st.dataframe(asset_df, use_container_width=True)
+            
+            # Show results by timeframe
+            st.subheader("📊 Resultados por Timeframe")
+            
+            # Create tabs for each timeframe
+            timeframe_tabs = st.tabs([f"📈 {tf}" for tf in multi_results.keys() if tf != 'Global'])
+            
+            for i, (tf, df) in enumerate(multi_results.items()):
+                if tf == 'Global':
+                    continue
+                
+                with timeframe_tabs[i]:
+                    if not df.empty:
+                        st.dataframe(df, use_container_width=True)
+                    else:
+                        st.info(f"No hay datos para {tf}")
+            
+            # Download combined results
+            all_dataframes = [df for tf, df in multi_results.items() if tf != 'Global']
+            if all_dataframes:
+                combined_df = pd.concat(all_dataframes, ignore_index=True)
+                csv = combined_df.to_csv(index=False)
+                st.download_button(
+                    label="📥 Descargar CSV Multi-Timeframe",
+                    data=csv,
+                    file_name=f"multi_timeframe_comparison_{symbol}_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv"
+                )
+            
+            comparison_df = multi_results.get('Global', pd.DataFrame())  # Use global ranking as main comparison
+        else:
+            st.warning("⚠️ No se pudieron obtener resultados multi-timeframe")
     comparison_df = compare_all_strategies(symbol, timeframe, capital)
     
     if not comparison_df.empty:
@@ -865,66 +1131,65 @@ with tab3:
     simulated_trades = generate_simulated_trade_history(symbol, timeframe)
     
     if not simulated_trades.empty:
-        # Summary stats
-        st.subheader("📊 Estadísticas Generales")
+            # Summary stats
+            st.subheader("📊 Estadísticas Generales")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total Trades", len(simulated_trades))
+            
+            with col2:
+                closed = simulated_trades[simulated_trades['Estado'] == 'CLOSED']
+                st.metric("Trades Cerrados", len(closed))
+            
+            with col3:
+                if len(closed) > 0:
+                    total_pnl = closed['PnL ($)'].sum()
+                    st.metric("PnL Total", f"${total_pnl:.2f}")
+                else:
+                    st.metric("PnL Total", "$0.00")
+            
+            with col4:
+                if len(closed) > 0:
+                    win_rate = len(closed[closed['PnL ($)'] > 0]) / len(closed) * 100
+                    st.metric("Win Rate", f"{win_rate:.1f}%")
+                else:
+                    st.metric("Win Rate", "0%")
         
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Total Trades", len(simulated_trades))
-        
-        with col2:
-            closed = simulated_trades[simulated_trades['Estado'] == 'CLOSED']
-            st.metric("Trades Cerrados", len(closed))
-        
-        with col3:
-            if len(closed) > 0:
-                total_pnl = closed['PnL ($)'].sum()
-                st.metric("PnL Total", f"${total_pnl:.2f}")
-            else:
-                st.metric("PnL Total", "$0.00")
-        
-        with col4:
-            if len(closed) > 0:
-                win_rate = len(closed[closed['PnL ($)'] > 0]) / len(closed) * 100
-                st.metric("Win Rate", f"{win_rate:.1f}%")
-            else:
-                st.metric("Win Rate", "0%")
-        
-        # Strategy filter
-        st.subheader("🔍 Filtros")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            strategies = simulated_trades['Estrategia'].unique()
-            selected_strategy = st.selectbox("Filtrar por Estrategia", ["Todas"] + list(strategies))
-        
-        with col2:
-            status_filter = st.selectbox("Filtrar por Estado", ["Todos", "CLOSED", "OPEN"])
-        
-        # Apply filters
-        filtered_trades = simulated_trades.copy()
-        if selected_strategy != "Todas":
-            filtered_trades = filtered_trades[filtered_trades['Estrategia'] == selected_strategy]
-        if status_filter != "Todos":
-            filtered_trades = filtered_trades[filtered_trades['Estado'] == status_filter]
-        
-        # Display trades table
-        st.subheader("📋 Lista de Trades")
-        st.dataframe(filtered_trades, use_container_width=True)
-        
-        # Equity curve chart
-        st.subheader("📈 Curva de Equity")
-        equity_chart = create_equity_curve_chart(simulated_trades)
-        if equity_chart:
-            st.plotly_chart(equity_chart, use_container_width=True)
-        
-        # Strategy performance comparison
-        st.subheader("📊 Performance por Estrategia")
-        strategy_performance = create_strategy_performance_chart(simulated_trades)
-        if strategy_performance:
-            st.plotly_chart(strategy_performance, use_container_width=True)
-        
+            # Strategy filter
+            st.subheader("🔍 Filtros")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                strategies = simulated_trades['Estrategia'].unique()
+                selected_strategy = st.selectbox("Filtrar por Estrategia", ["Todas"] + list(strategies))
+            
+            with col2:
+                status_filter = st.selectbox("Filtrar por Estado", ["Todos", "CLOSED", "OPEN"])
+            
+            # Apply filters
+            filtered_trades = simulated_trades.copy()
+            if selected_strategy != "Todas":
+                filtered_trades = filtered_trades[filtered_trades['Estrategia'] == selected_strategy]
+            if status_filter != "Todos":
+                filtered_trades = filtered_trades[filtered_trades['Estado'] == status_filter]
+            
+            # Display trades table
+            st.subheader("📋 Lista de Trades")
+            st.dataframe(filtered_trades, use_container_width=True)
+            
+            # Equity curve chart
+            st.subheader("📈 Curva de Equity")
+            equity_chart = create_equity_curve_chart(simulated_trades)
+            if equity_chart:
+                st.plotly_chart(equity_chart, use_container_width=True)
+            
+            # Strategy performance comparison
+            st.subheader("📊 Performance por Estrategia")
+            strategy_performance = create_strategy_performance_chart(simulated_trades)
+            if strategy_performance:
+                st.plotly_chart(strategy_performance, use_container_width=True)
     else:
         st.info("📝 No hay datos simulados disponibles")
 

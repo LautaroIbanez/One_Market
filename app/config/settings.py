@@ -1,7 +1,7 @@
 """Configuration settings for One Market platform."""
 import os
 from pathlib import Path
-from typing import Literal, Dict
+from typing import Literal, Dict, List
 from pydantic_settings import BaseSettings
 from pydantic import Field, BaseModel
 
@@ -45,6 +45,39 @@ class Settings(BaseSettings):
     # Project paths
     PROJECT_ROOT: Path = Path(__file__).parent.parent.parent
     STORAGE_PATH: Path = Field(default_factory=lambda: Path(__file__).parent.parent.parent / "storage")
+    
+    # Timeframe configuration for homogeneous data loading
+    TIMEFRAME_CANDLE_TARGETS: Dict[str, int] = Field(
+        default={
+            "1m": 10080,    # ~1 week
+            "5m": 2016,     # ~1 week  
+            "15m": 672,     # ~1 week
+            "1h": 168,      # ~1 week
+            "4h": 42,       # ~1 week
+            "12h": 14,      # ~1 week
+            "1d": 365,      # ~1 year
+            "1w": 52,       # ~1 year
+        },
+        description="Target number of candles per timeframe for homogeneous comparison"
+    )
+    
+    # Target timeframes for multi-timeframe analysis
+    TARGET_TIMEFRAMES: List[str] = Field(
+        default=["1d", "12h", "4h", "1h", "15m", "5m"],
+        description="Timeframes to analyze in multi-timeframe mode"
+    )
+    
+    # Ranking weights for global strategy ranking
+    RANKING_WEIGHTS: Dict[str, float] = Field(
+        default={
+            "sharpe_ratio": 0.30,
+            "win_rate": 0.20,
+            "max_drawdown": 0.20,
+            "profit_factor": 0.20,
+            "expectancy": 0.10
+        },
+        description="Weights for global strategy ranking"
+    )
     
     # Exchange configuration
     EXCHANGE_NAME: str = Field(default="binance", description="Default exchange")

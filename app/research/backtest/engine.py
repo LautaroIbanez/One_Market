@@ -20,9 +20,11 @@ warnings.filterwarnings('ignore')
 # Import vectorbt (will be installed via requirements)
 try:
     import vectorbt as vbt
+    VBT_AVAILABLE = True
 except ImportError:
     vbt = None
-    warnings.warn("vectorbt not installed. Install with: pip install vectorbt")
+    VBT_AVAILABLE = False
+    warnings.warn("vectorbt not installed. Using fallback engine. Install with: pip install vectorbt")
 
 from app.core.calendar import TradingCalendar
 from app.core.risk import compute_levels
@@ -142,8 +144,10 @@ class BacktestEngine:
         Returns:
             BacktestResult with metrics
         """
-        if vbt is None:
-            raise ImportError("vectorbt not installed. Install with: pip install vectorbt")
+        if not VBT_AVAILABLE:
+            if verbose:
+                print(f"Using fallback engine for {strategy_name}")
+            return self._run_fallback_backtest(df, signals, strategy_name, verbose)
         
         if verbose:
             print(f"\n{'='*60}")
@@ -452,4 +456,157 @@ class BacktestEngine:
         print(f"  From: {result.start_date.strftime('%Y-%m-%d')}")
         print(f"  To: {result.end_date.strftime('%Y-%m-%d')}")
         print(f"{'='*60}\n")
+    
+    def _run_fallback_backtest(
+        self,
+        df: pd.DataFrame,
+        signals: pd.Series,
+        strategy_name: str = "Strategy",
+        verbose: bool = True
+    ) -> BacktestResult:
+        """Run fallback backtest without vectorbt.
+        
+        Args:
+            df: DataFrame with OHLCV data
+            signals: Signal series (1=long, -1=short, 0=flat)
+            strategy_name: Name of strategy
+            verbose: Print progress
+            
+        Returns:
+            BacktestResult with metrics
+        """
+        if verbose:
+            print(f"\n{'='*60}")
+            print(f"Running fallback backtest: {strategy_name}")
+            print(f"{'='*60}")
+        
+        # Simple backtest logic
+        trades = []
+        capital = self.config.initial_capital
+        position = 0
+        entry_price = 0
+        entry_time = None
+        
+        for i, (timestamp, row) in enumerate(df.iterrows()):
+            signal = signals.iloc[i] if i < len(signals) else 0
+            price = row['close']
+            
+            # Entry logic
+            if signal != 0 and position == 0:
+                # Calculate position size based on risk
+                risk_amount = capital * self.config.risk_per_trade
+                position_size = risk_amount / price
+                
+                position = position_size
+                entry_price = price
+                entry_time = timestamp
+                
+                if verbose and i % 100 == 0:
+                    print(f"Entry at {price:.2f}, position: {position:.4f}")
+            
+            # Exit logic
+            elif position != 0 and signal == 0:
+                # Calculate PnL
+                pnl = (price - entry_price) * position
+                pnl_pct = pnl / (entry_price * position) if position > 0 else 0
+                
+                # Apply commission and slippage
+                commission = abs(position * price * self.config.commission)
+                slippage = abs(position * price * self.config.slippage)
+                net_pnl = pnl - commission - slippage
+                
+                trades.append({
+                    'entry_time': entry_time,
+                    'exit_time': timestamp,
+                    'entry_price': entry_price,
+                    'exit_price': price,
+                    'quantity': position,
+                    'pnl': net_pnl,
+                    'pnl_pct': pnl_pct,
+                    'commission': commission,
+                    'slippage': slippage
+                })
+                
+                capital += net_pnl
+                position = 0
+                entry_price = 0
+                entry_time = None
+        
+        # Calculate metrics
+        if not trades:
+            return BacktestResult(
+                strategy_name=strategy_name,
+                start_date=df.index[0],
+                end_date=df.index[-1],
+                initial_capital=self.config.initial_capital,
+                final_capital=self.config.initial_capital,
+                total_return=0.0,
+                cagr=0.0,
+                sharpe_ratio=0.0,
+                sortino_ratio=0.0,
+                calmar_ratio=0.0,
+                max_drawdown=0.0,
+                volatility=0.0,
+                win_rate=0.0,
+                profit_factor=0.0,
+                expectancy=0.0,
+                total_trades=0,
+                winning_trades=0,
+                losing_trades=0,
+                avg_win=0.0,
+                avg_loss=0.0,
+                trades=trades
+            )
+        
+        # Calculate comprehensive metrics
+        from app.utils.metrics_helper import MetricsCalculator
+        
+        calculator = MetricsCalculator()
+        equity_curve = [self.config.initial_capital]
+        for trade in trades:
+            equity_curve.append(equity_curve[-1] + trade['pnl'])
+        
+        # Handle empty DataFrame
+        if len(df) == 0:
+            start_date = datetime.now() - timedelta(days=30)
+            end_date = datetime.now()
+        else:
+            start_date = df.index[0]
+            end_date = df.index[-1]
+        
+        metrics = calculator.calculate_comprehensive_metrics(
+            trades=trades,
+            equity_curve=equity_curve,
+            initial_capital=self.config.initial_capital,
+            start_date=start_date,
+            end_date=end_date
+        )
+        
+        if verbose:
+            print(f"Fallback backtest completed: {len(trades)} trades")
+            print(f"Final capital: ${capital:.2f}")
+        
+        return BacktestResult(
+            strategy_name=strategy_name,
+            start_date=df.index[0],
+            end_date=df.index[-1],
+            initial_capital=self.config.initial_capital,
+            final_capital=capital,
+            total_return=metrics['total_return'],
+            cagr=metrics['cagr'],
+            sharpe_ratio=metrics['sharpe_ratio'],
+            sortino_ratio=metrics['sortino_ratio'],
+            calmar_ratio=metrics['calmar_ratio'],
+            max_drawdown=metrics['max_drawdown'],
+            volatility=metrics['volatility'],
+            win_rate=metrics['win_rate'],
+            profit_factor=metrics['profit_factor'],
+            expectancy=metrics['expectancy'],
+            total_trades=metrics['total_trades'],
+            winning_trades=metrics['winning_trades'],
+            losing_trades=metrics['losing_trades'],
+            avg_win=metrics['avg_win'],
+            avg_loss=metrics['avg_loss'],
+            trades=trades
+        )
 
