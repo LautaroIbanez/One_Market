@@ -326,6 +326,10 @@ class StructuredLogger:
 # Global structured logger instance
 structured_logger = StructuredLogger()
 
+# Compatibility aliases for imports
+logger = structured_logger
+event_logger = structured_logger
+
 
 def get_structured_logger() -> StructuredLogger:
     """Get the global structured logger.

@@ -424,7 +424,7 @@ async def get_best_strategy(
         return recommendation.model_dump()
     
     except Exception as e:
-        logger.error(f"Error getting best strategy: {e}")
+        logger.error("api", f"Error getting best strategy: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -450,7 +450,7 @@ async def compare_strategies(
         }
     
     except Exception as e:
-        logger.error(f"Error comparing strategies: {e}")
+        logger.error("api", f"Error comparing strategies: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -471,7 +471,7 @@ async def get_strategy_rankings(
         }
     
     except Exception as e:
-        logger.error(f"Error getting rankings: {e}")
+        logger.error("api", f"Error getting rankings: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -540,7 +540,7 @@ async def get_trade_history(
         }
     
     except Exception as e:
-        logger.error(f"Error getting trade history: {e}")
+        logger.error("api", f"Error getting trade history: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -593,7 +593,7 @@ async def get_trade_statistics(
         }
     
     except Exception as e:
-        logger.error(f"Error calculating trade stats: {e}")
+        logger.error("api", f"Error calculating trade stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -635,7 +635,7 @@ async def get_performance_metrics(
             }
     
     except Exception as e:
-        logger.error(f"Error getting performance metrics: {e}")
+        logger.error("api", f"Error getting performance metrics: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -652,7 +652,7 @@ async def get_divergence_alerts(days: int = 7):
         }
     
     except Exception as e:
-        logger.error(f"Error getting divergence alerts: {e}")
+        logger.error("api", f"Error getting divergence alerts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -729,7 +729,7 @@ async def generate_briefing(
         return briefing.dict()
     
     except Exception as e:
-        logger.error(f"Error generating briefing: {e}")
+        logger.error("api", f"Error generating briefing: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -778,7 +778,7 @@ async def get_briefing_markdown(
         }
     
     except Exception as e:
-        logger.error(f"Error generating briefing markdown: {e}")
+        logger.error("api", f"Error generating briefing markdown: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -817,7 +817,7 @@ async def get_hypothetical_plan(
         return plan
     
     except Exception as e:
-        logger.error(f"Error calculating hypothetical plan: {e}")
+        logger.error("api", f"Error calculating hypothetical plan: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -828,7 +828,7 @@ async def get_hypothetical_plan(
 @app.on_event("startup")
 async def startup_event():
     """Run on application startup."""
-    logger.info("ONE MARKET API - Starting", version=app.version, host=settings.API_HOST, port=settings.API_PORT)
+    logger.info("api", "ONE MARKET API - Starting", version=app.version, host=settings.API_HOST, port=settings.API_PORT)
     
     print("="*60)
     print("ONE MARKET API - Starting")
@@ -847,7 +847,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Run on application shutdown."""
-    logger.info("ONE MARKET API - Shutting down")
+    logger.info("api", "ONE MARKET API - Shutting down")
     print("\nONE MARKET API - Shutting down")
     
     if settings.SCHEDULER_ENABLED:

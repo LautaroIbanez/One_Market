@@ -3,11 +3,10 @@ chcp 65001 >nul
 cls
 echo.
 echo ╔════════════════════════════════════════════════════════════╗
-echo ║         📊 ONE MARKET - Iniciando UI Streamlit             ║
+echo ║         🧪 ONE MARKET - Probar UI Corregida                ║
 echo ╚════════════════════════════════════════════════════════════╝
 echo.
-echo ℹ️  La UI estará disponible en: http://localhost:8501
-echo.
+
 echo ⚠️  IMPORTANTE: La API debe estar corriendo en puerto 8000
 echo ℹ️  Si no está corriendo, ejecuta primero: EJECUTAR_API.bat
 echo.
@@ -15,44 +14,29 @@ echo.
 REM Verificar que existe el archivo
 if not exist "ui\app_enhanced.py" (
     echo ❌ Error: No se encuentra ui\app_enhanced.py
-    echo ℹ️  Directorio actual: %CD%
-    echo.
     pause
     exit /b 1
 )
 
-REM Verificar que streamlit está instalado
-python -c "import streamlit; print('Streamlit OK')" >nul 2>&1
-if errorlevel 1 (
-    echo ❌ Streamlit no está instalado
-    echo ℹ️  Instalando Streamlit...
-    pip install streamlit
-    echo.
-) else (
-    echo ✅ Streamlit disponible
-)
-
-echo ⏳ Iniciando UI...
+echo ⏳ Iniciando UI con correcciones...
 echo ℹ️  Presiona Ctrl+C para detener
 echo.
+
 set PYTHONPATH=%CD%
 
-REM Mostrar comando que se va a ejecutar
 echo 🔧 Ejecutando: python -m streamlit run ui/app_enhanced.py
 echo.
 
 python -m streamlit run ui/app_enhanced.py
 
-REM Si hay error, pausar para ver el mensaje
 if errorlevel 1 (
     echo.
     echo ❌ Error al iniciar la UI
-    echo ℹ️  Revisa el mensaje de error arriba
     echo.
-    echo 🆘 Soluciones posibles:
+    echo 🆘 Soluciones:
     echo    1. Ejecuta primero: EJECUTAR_API.bat
-    echo    2. Ejecuta: pip install streamlit
-    echo    3. Ejecuta: VERIFICAR_SISTEMA.bat
+    echo    2. Verifica que Python esté instalado
+    echo    3. Ejecuta: pip install streamlit
     echo.
     pause
 ) else (

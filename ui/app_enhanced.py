@@ -67,7 +67,7 @@ def get_best_strategy_recommendation(symbol: str, capital: float):
         
         # Use the new comprehensive recommendation service
         service = DailyRecommendationService(capital=capital, max_risk_pct=0.02)
-        recommendation = service.get_daily_recommendation(symbol, include_combinations=True)
+        recommendation = service.get_daily_recommendation(symbol)
         
         if recommendation:
             return recommendation
@@ -84,29 +84,17 @@ def get_best_strategy_recommendation(symbol: str, capital: float):
 
 def create_simple_recommendation(symbol: str, capital: float):
     """Create a simple recommendation when full system fails."""
-    from app.service.daily_recommendation import DailyRecommendation
+    from app.service.recommendation_contract import Recommendation, PlanDirection
     
-    return DailyRecommendation(
+    return Recommendation(
         date=datetime.now().strftime('%Y-%m-%d'),
         symbol=symbol,
-        recommended_strategy="MA Crossover (Fallback)",
-        recommended_timeframe="1h",
-        is_combination=False,
-        global_score=0.5,
-        global_rank=1,
-        confidence_level="LOW",
-        expected_sharpe=1.0,
-        expected_win_rate=0.55,
-        expected_cagr=0.08,
-        expected_max_dd=-0.10,
-        expected_profit_factor=1.2,
-        expected_expectancy=20.0,
-        sharpe_consistency=0.5,
-        cross_timeframe_agreement=0.0,
-        signal_direction=0,
-        alternatives=[],
-        reasoning="Recomendación de fallback - sistema completo no disponible",
-        warnings=["Sistema multi-timeframe no disponible", "Usar con precaución"]
+        timeframe="1h",
+        direction=PlanDirection.HOLD,
+        rationale="Sistema de recomendación en modo fallback - análisis completo no disponible",
+        confidence=30,
+        dataset_hash="fallback_hash",
+        params_hash="fallback_params"
     )
 
 
@@ -945,19 +933,19 @@ with tab1:
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.metric("🥇 Mejor Estrategia", recommendation.recommended_strategy)
-            st.metric("Score Global", f"{recommendation.global_score:.2f}")
-            st.metric("Rank", f"#{recommendation.global_rank}")
+            st.metric("📊 Símbolo", recommendation.symbol)
+            st.metric("⏰ Timeframe", recommendation.timeframe)
+            st.metric("🎯 Dirección", recommendation.direction.value)
         
         with col2:
-            st.metric("Timeframe Óptimo", recommendation.recommended_timeframe)
-            st.metric("Sharpe Esperado", f"{recommendation.expected_sharpe:.2f}")
-            st.metric("Win Rate Esperado", f"{recommendation.expected_win_rate:.1%}")
+            st.metric("💡 Confianza", f"{recommendation.confidence}%")
+            st.metric("📅 Fecha", recommendation.date)
+            st.metric("🔒 Hash Dataset", recommendation.dataset_hash[:8] + "...")
         
         with col3:
-            st.metric("CAGR Esperado", f"{recommendation.expected_cagr:.1%}")
-            st.metric("Max DD Esperado", f"{abs(recommendation.expected_max_dd):.1%}")
-            st.metric("Expectancy", f"${recommendation.expected_expectancy:.2f}")
+            st.metric("💰 Precio Entrada", f"${recommendation.entry_price:.2f}" if recommendation.entry_price else "N/A")
+            st.metric("🛑 Stop Loss", f"${recommendation.stop_loss:.2f}" if recommendation.stop_loss else "N/A")
+            st.metric("🎯 Take Profit", f"${recommendation.take_profit:.2f}" if recommendation.take_profit else "N/A")
         
         # Tipo de estrategia
         if recommendation.is_combination:
