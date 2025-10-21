@@ -170,7 +170,7 @@ def generate_recommendation_text(
             if decision.position_size:
                 lines.append(f"\n**Position**:")
                 lines.append(f"• Size: {decision.position_size.quantity:.4f} units")
-                lines.append(f"• Notional: ${decision.position_size.notional:,.2f}")
+                lines.append(f"• Notional: ${decision.position_size.notional_value:,.2f}")
                 lines.append(f"• Risk: ${decision.position_size.risk_amount:,.2f} ({decision.position_size.risk_pct:.1%})")
     
     else:

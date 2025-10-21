@@ -319,6 +319,50 @@ class PaperTradingDB:
             
             return trades
     
+    def get_all_trades(self, symbol: Optional[str] = None) -> List[TradeRecord]:
+        """Get all trades (open and closed).
+        
+        Args:
+            symbol: Filter by symbol (optional)
+            
+        Returns:
+            List of all TradeRecords
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            if symbol:
+                cursor.execute("SELECT * FROM trades WHERE symbol = ? ORDER BY entry_time DESC", (symbol,))
+            else:
+                cursor.execute("SELECT * FROM trades ORDER BY entry_time DESC")
+            
+            rows = cursor.fetchall()
+            
+            trades = []
+            for row in rows:
+                trades.append(TradeRecord(
+                    trade_id=row['trade_id'],
+                    decision_id=row['decision_id'],
+                    entry_time=datetime.fromisoformat(row['entry_time']),
+                    exit_time=datetime.fromisoformat(row['exit_time']) if row['exit_time'] else None,
+                    duration_hours=row['duration_hours'],
+                    symbol=row['symbol'],
+                    side=row['side'],
+                    entry_price=row['entry_price'],
+                    exit_price=row['exit_price'],
+                    stop_loss=row['stop_loss'],
+                    take_profit=row['take_profit'],
+                    quantity=row['quantity'],
+                    notional_value=row['notional_value'],
+                    realized_pnl=row['realized_pnl'],
+                    realized_pnl_pct=row['realized_pnl_pct'],
+                    exit_reason=row['exit_reason'],
+                    status=row['status']
+                ))
+            
+            return trades
+    
     def get_decisions_by_day(self, trading_day: str) -> List[DecisionRecord]:
         """Get all decisions for a trading day.
         
