@@ -41,6 +41,17 @@ class Recommendation(BaseModel):
     rationale: str = Field(..., description="Reasoning for recommendation")
     confidence: int = Field(..., ge=0, le=100, description="Confidence level (0-100)")
     
+    # Strategy information (new fields)
+    strategy_name: Optional[str] = Field(None, description="Best strategy name")
+    strategy_score: Optional[float] = Field(None, description="Strategy composite score")
+    sharpe_ratio: Optional[float] = Field(None, description="Strategy Sharpe ratio")
+    win_rate: Optional[float] = Field(None, description="Strategy win rate")
+    max_drawdown: Optional[float] = Field(None, description="Strategy max drawdown")
+    
+    # Multi-timeframe analysis (new fields)
+    mtf_analysis: Optional[Dict[str, Any]] = Field(None, description="Multi-timeframe analysis details")
+    ranking_weights: Optional[Dict[str, float]] = Field(None, description="Strategy ranking weights")
+    
     # Data integrity
     dataset_hash: str = Field(..., description="Hash of dataset used")
     params_hash: str = Field(..., description="Hash of parameters used")

@@ -4,7 +4,7 @@ This module runs backtests on all registered strategies and ranks them by perfor
 """
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 from datetime import datetime, timedelta
 from pydantic import BaseModel, Field
 import logging
@@ -70,6 +70,9 @@ class StrategyBacktestResult(BaseModel):
     
     # Configuration used
     capital: float
+    
+    # Trade details (new field)
+    trades: List[Dict[str, Any]] = Field(default_factory=list, description="Detailed trade list")
     risk_pct: float
     lookback_days: int
     

@@ -16,6 +16,7 @@ from app.data import DataStore, DataFetcher, FetchRequest
 from app.api.routes.data import router as data_router
 from app.api.routes.backtest import router as backtest_router
 from app.api.routes.recommendation import router as recommendation_router
+from app.api.routes.ranking_simple import router as ranking_router
 
 # Service
 from app.service import DecisionEngine, MarketAdvisor, PaperTradingDB
@@ -53,6 +54,7 @@ app.add_middleware(
 app.include_router(data_router)
 app.include_router(backtest_router)
 app.include_router(recommendation_router)
+app.include_router(ranking_router)
 
 
 # ============================================================

@@ -49,7 +49,8 @@ async def get_daily_recommendation(
     try:
         # Use today's date if not specified
         if date is None:
-            date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            # Use local date to avoid timezone issues
+            date = datetime.now().strftime("%Y-%m-%d")
         
         # Validate date format
         try:
@@ -95,7 +96,8 @@ async def get_recommendation_history(
     try:
         # Use today's date if not specified
         if to_date is None:
-            to_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            # Use local date to avoid timezone issues
+            to_date = datetime.now().strftime("%Y-%m-%d")
         
         # Validate date formats
         try:
@@ -192,8 +194,8 @@ async def get_recommendation_stats(symbol: str):
         service = get_recommendation_service()
         
         # Get last 30 days of recommendations
-        end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        start_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+        end_date = datetime.now().strftime("%Y-%m-%d")
+        start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
         
         recommendations = service.get_recommendation_history(symbol, start_date, end_date)
         

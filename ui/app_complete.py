@@ -171,18 +171,25 @@ st.subheader("🧠 Recomendación Diaria Inteligente")
 recommendation = get_complete_recommendation(symbol, capital, risk_pct)
 
 if recommendation:
-    # Display recommendation metrics
+    # Enhanced recommendation display with weights and strategy analysis
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.metric("📊 Símbolo", recommendation.get("symbol", "N/A"))
         st.metric("⏰ Timeframe", recommendation.get("timeframe", "N/A"))
         st.metric("🎯 Dirección", recommendation.get("direction", "N/A"))
+        # Strategy information
+        strategy_name = recommendation.get("strategy_name")
+        if strategy_name:
+            st.metric("🤖 Estrategia", strategy_name)
     
     with col2:
-        st.metric("💡 Confianza", f"{recommendation.get('confidence', 0)}%")
+        st.metric("💡 Confianza", f"{recommendation.get('confidence', 0):.1f}%")
         st.metric("📅 Fecha", recommendation.get("date", "N/A"))
-        st.metric("🔒 Hash Dataset", recommendation.get("dataset_hash", "N/A")[:8] + "...")
+        # Strategy score
+        strategy_score = recommendation.get("strategy_score")
+        if strategy_score:
+            st.metric("⭐ Score Estrategia", f"{strategy_score:.2f}")
     
     with col3:
         entry_price = recommendation.get("entry_price")
@@ -199,6 +206,93 @@ if recommendation:
         st.metric("💸 Riesgo ($)", f"${risk_amount:.2f}" if risk_amount else "N/A")
         risk_pct_actual = recommendation.get("risk_percentage")
         st.metric("📊 Riesgo (%)", f"{risk_pct_actual:.1f}%" if risk_pct_actual else "N/A")
+    
+    # Enhanced metrics section
+    st.markdown("---")
+    st.subheader("📈 Métricas de Estrategia")
+    
+    # Strategy performance metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        sharpe_ratio = recommendation.get("sharpe_ratio")
+        if sharpe_ratio:
+            st.metric("📊 Sharpe Ratio", f"{sharpe_ratio:.2f}")
+        else:
+            st.metric("📊 Sharpe Ratio", "N/A")
+    
+    with col2:
+        win_rate = recommendation.get("win_rate")
+        if win_rate:
+            st.metric("🎯 Win Rate", f"{win_rate:.1%}")
+        else:
+            st.metric("🎯 Win Rate", "N/A")
+    
+    with col3:
+        max_drawdown = recommendation.get("max_drawdown")
+        if max_drawdown:
+            st.metric("📉 Max Drawdown", f"{max_drawdown:.1%}")
+        else:
+            st.metric("📉 Max Drawdown", "N/A")
+    
+    with col4:
+        # Show ranking weights if available
+        ranking_weights = recommendation.get("ranking_weights")
+        if ranking_weights:
+            st.metric("⚖️ Pesos Ranking", f"L:{ranking_weights.get('LONG', 0):.2f}")
+        else:
+            st.metric("⚖️ Pesos Ranking", "N/A")
+    
+    # Multi-timeframe analysis
+    mtf_analysis = recommendation.get("mtf_analysis")
+    if mtf_analysis:
+        st.markdown("---")
+        st.subheader("🔄 Análisis Multi-Timeframe")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("📊 Score Combinado", f"{mtf_analysis.get('combined_score', 0):.2f}")
+        
+        with col2:
+            st.metric("🎯 Dirección MTF", f"{mtf_analysis.get('direction', 0)}")
+        
+        with col3:
+            st.metric("💡 Confianza MTF", f"{mtf_analysis.get('confidence', 0):.1%}")
+        
+        # Strategy weights breakdown
+        strategy_weights = mtf_analysis.get("strategy_weights", [])
+        if strategy_weights:
+            st.markdown("#### ⚖️ Desglose de Pesos de Estrategias")
+            
+            weights_data = []
+            for sw in strategy_weights:
+                weights_data.append({
+                    "Estrategia": sw.get("strategy", "N/A"),
+                    "Timeframe": sw.get("timeframe", "N/A"),
+                    "Peso": f"{sw.get('weight', 0):.3f}",
+                    "Score": f"{sw.get('score', 0):.3f}"
+                })
+            
+            if weights_data:
+                weights_df = pd.DataFrame(weights_data)
+                st.dataframe(weights_df, use_container_width=True)
+        
+        # Weight distribution
+        weight_distribution = mtf_analysis.get("weight_distribution", {})
+        if weight_distribution:
+            st.markdown("#### 📊 Distribución de Pesos por Dirección")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("🟢 LONG", f"{weight_distribution.get('LONG', 0):.3f}")
+            
+            with col2:
+                st.metric("🔴 SHORT", f"{weight_distribution.get('SHORT', 0):.3f}")
+            
+            with col3:
+                st.metric("⚪ HOLD", f"{weight_distribution.get('HOLD', 0):.3f}")
     
     # Rationale
     st.markdown("---")
