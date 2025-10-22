@@ -15,6 +15,7 @@ from app.research.backtest.engine import BacktestEngine, BacktestConfig, Backtes
 from app.data import DataStore, DataFetcher
 from app.research.signals import generate_signal, get_strategy_list
 from app.service.recommendation_contract import Recommendation, PlanDirection
+from app.utils.strategy_mapping import normalize_strategy_name
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ class BacktestRequest(BaseModel):
     slippage: float = Field(default=0.0005, description="Slippage rate")
     
     # Trading rules
-    use_trading_windows: bool = Field(default=True, description="Apply trading windows")
+    use_trading_windows: bool = Field(default=False, description="Apply trading windows")
     force_close: bool = Field(default=True, description="Force close positions")
     one_trade_per_day: bool = Field(default=True, description="Limit to 1 trade per day")
     
@@ -140,7 +141,7 @@ async def run_backtest(request: BacktestRequest):
         # Load data
         df = store.read_bars(
             symbol=request.symbol,
-            tf=request.timeframe,
+            timeframe=request.timeframe,
             since=request.from_date,
             until=request.to_date
         )
@@ -156,8 +157,11 @@ async def run_backtest(request: BacktestRequest):
             df = pd.DataFrame([bar.to_dict() for bar in df])
             df = df.sort_values('timestamp').reset_index(drop=True)
         
+        # Normalize strategy name
+        normalized_strategy = normalize_strategy_name(request.strategy)
+        
         # Generate signals
-        signal_output = generate_signal(df['close'], request.strategy)
+        signal_output = generate_signal(normalized_strategy, df)
         if signal_output is None or signal_output.signal.empty:
             raise HTTPException(
                 status_code=400,

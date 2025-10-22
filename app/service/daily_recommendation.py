@@ -92,7 +92,7 @@ class DailyRecommendationService:
             Recommendation object or HOLD with reason
         """
         if timeframes is None:
-            timeframes = ["15m", "1h", "4h", "1d"]
+            timeframes = ["1h", "4h", "1d"]
         
         try:
             logger.info(f"Generating recommendation for {symbol} on {date}")
@@ -230,7 +230,6 @@ class DailyRecommendationService:
         
         # Weights for different timeframes (longer = more weight)
         timeframe_weights = {
-            "15m": 0.1,
             "1h": 0.2,
             "4h": 0.3,
             "1d": 0.4

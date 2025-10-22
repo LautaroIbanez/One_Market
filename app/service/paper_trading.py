@@ -11,7 +11,7 @@ from typing import List, Optional, Dict
 from datetime import datetime
 import json
 
-from app.data.schema import DecisionRecord, TradeRecord, PerformanceMetrics
+from app.data.paper_trading_schemas import DecisionRecord, TradeRecord, PerformanceMetrics
 from app.config.settings import settings
 
 

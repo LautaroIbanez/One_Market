@@ -395,6 +395,21 @@ class BacktestEngine:
         # Final capital
         final_capital = portfolio.final_value()
         
+        # Calculate profit
+        profit = final_capital - self.config.initial_capital
+        
+        # Generate hashes
+        import hashlib
+        dataset_content = f"{df['timestamp'].iloc[0]}_{df['timestamp'].iloc[-1]}_{len(df)}"
+        dataset_hash = hashlib.sha256(dataset_content.encode('utf-8')).hexdigest()[:16]
+        
+        params_content = str(self.config.dict())
+        params_hash = hashlib.sha256(params_content.encode('utf-8')).hexdigest()[:16]
+        
+        # Timestamps
+        from_timestamp = int(df['timestamp'].iloc[0])
+        to_timestamp = int(df['timestamp'].iloc[-1])
+        
         return BacktestResult(
             total_return=float(total_return),
             cagr=float(cagr),
@@ -421,7 +436,12 @@ class BacktestEngine:
             start_date=start_date,
             end_date=end_date,
             initial_capital=float(self.config.initial_capital),
-            final_capital=float(final_capital)
+            final_capital=float(final_capital),
+            profit=float(profit),
+            dataset_hash=dataset_hash,
+            params_hash=params_hash,
+            from_timestamp=from_timestamp,
+            to_timestamp=to_timestamp
         )
     
     def _print_summary(self, result: BacktestResult):

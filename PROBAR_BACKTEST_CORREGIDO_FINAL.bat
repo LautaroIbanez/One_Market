@@ -3,7 +3,7 @@ chcp 65001 >nul
 cls
 echo.
 echo ╔════════════════════════════════════════════════════════════╗
-echo ║         🔧 ONE MARKET - Probar UI Corregida              ║
+echo ║         🔧 ONE MARKET - Probar Backtest Corregido Final ║
 echo ╚════════════════════════════════════════════════════════════╝
 echo.
 
@@ -11,40 +11,42 @@ echo ⚠️  IMPORTANTE: La API debe estar corriendo en puerto 8000
 echo ℹ️  Si no está corriendo, ejecuta primero: EJECUTAR_API.bat
 echo.
 
-echo 🔧 Probando que la UI funciona con símbolos corregidos...
+echo 🔧 Probando que el backtest funciona después de corregir el hashing...
 echo ℹ️  Este script prueba:
-echo    ✅ Formato de sincronización de la UI
-echo    ✅ Símbolos con formato correcto (BTC/USDT)
-echo    ✅ Endpoint de recomendaciones
-echo    ✅ Diagnóstico de errores HTTP 400
+echo    ✅ Salud de la API
+echo    ✅ Disponibilidad de datos
+echo    ✅ Backtest con hashing corregido
+echo    ✅ Múltiples estrategias funcionando
+echo    ✅ Todos los campos requeridos generados
 echo.
 
 REM Verificar que existe el archivo
-if not exist "PROBAR_UI_CORREGIDA.py" (
-    echo ❌ Error: No se encuentra PROBAR_UI_CORREGIDA.py
+if not exist "PROBAR_BACKTEST_CORREGIDO_FINAL.py" (
+    echo ❌ Error: No se encuentra PROBAR_BACKTEST_CORREGIDO_FINAL.py
     pause
     exit /b 1
 )
 
-python PROBAR_UI_CORREGIDA.py
+python PROBAR_BACKTEST_CORREGIDO_FINAL.py
 
 if errorlevel 1 (
     echo.
-    echo ❌ Error en la prueba de UI
+    echo ❌ Error en la prueba del backtest corregido
     echo.
     echo 🆘 Soluciones:
     echo    1. Verifica que la API esté corriendo
-    echo    2. Revisa que los símbolos estén en formato correcto
-    echo    3. Verifica la conectividad a internet
-    echo    4. Revisa los logs de la API para más detalles
+    echo    2. Sincroniza datos primero: PROBAR_SINCRONIZACION_DATOS.bat
+    echo    3. Revisa que el hashing esté corregido
+    echo    4. Verifica que todos los campos estén generados
     echo.
     pause
 ) else (
     echo.
-    echo ✅ Prueba de UI completada
+    echo ✅ Prueba del backtest corregido completada
     echo.
     echo 🎯 PRÓXIMO PASO: Ejecutar EJECUTAR_UI_COMPLETA.bat
-    echo ✅ La UI debería funcionar sin errores HTTP 400
+    echo ✅ El backtest está funcionando con hashing corregido
     echo.
     pause
 )
+

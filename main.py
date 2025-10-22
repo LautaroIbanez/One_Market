@@ -10,9 +10,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 from app.config.settings import settings
-from app.data.store import DataStore
-from app.data.fetch import DataFetcher
-from app.data.schema import FetchRequest
+from app.data import DataStore, DataFetcher, FetchRequest
 
 # Include new data API routes
 from app.api.routes.data import router as data_router

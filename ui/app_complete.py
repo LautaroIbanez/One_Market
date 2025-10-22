@@ -32,7 +32,7 @@ st.sidebar.header("⚙️ Configuración del Sistema")
 # Symbol selection
 symbol = st.sidebar.selectbox(
     "Símbolo",
-    ["BTCUSDT", "ETHUSDT", "ADAUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"],
+    ["BTC/USDT", "ETH/USDT", "ADA/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"],
     index=0
 )
 

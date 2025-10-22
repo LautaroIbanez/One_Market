@@ -8,8 +8,7 @@ from typing import Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 import logging
 
-from app.data import DataFetcher, DataStore, DataSyncRequest, DataSyncResponse
-from app.data.schemas import SnapshotMeta
+from app.data import DataFetcher, DataStore, DataSyncRequest, DataSyncResponse, DatasetMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -70,24 +69,36 @@ async def sync_data(request: DataSyncRequest, background_tasks: BackgroundTasks)
             )
         
         # Perform sync
-        result = fetcher.sync_symbol_timeframe(
-            symbol=request.symbol,
-            timeframe=request.tf,
-            force_refresh=request.force_refresh
-        )
-        
-        if result["success"]:
-            logger.info(f"Successfully synced {request.symbol} {request.tf}: {result['bars_added']} bars")
-            return DataSyncResponse(
-                success=True,
+        try:
+            # Fetch data from exchange
+            bars = fetcher.fetch_ohlcv(
                 symbol=request.symbol,
-                tf=request.tf,
-                meta=result["meta"],
-                message=result["message"],
-                bars_added=result["bars_added"]
+                timeframe=request.tf,
+                since=request.since,
+                until=request.until
             )
-        else:
-            raise HTTPException(status_code=500, detail=result["message"])
+            
+            if not bars:
+                return DataSyncResponse(
+                    message=f"No data available for {request.symbol} {request.tf}",
+                    fetched_count=0,
+                    stored_count=0
+                )
+            
+            # Store data
+            metadata = store.write_bars(bars)
+            
+            logger.info(f"Successfully synced {request.symbol} {request.tf}: {len(bars)} bars")
+            return DataSyncResponse(
+                message=f"Successfully synced {len(bars)} bars for {request.symbol} {request.tf}",
+                snapshot_meta=metadata,
+                fetched_count=len(bars),
+                stored_count=len(bars)
+            )
+            
+        except Exception as e:
+            logger.error(f"Error fetching data: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to fetch data: {str(e)}")
             
     except HTTPException:
         raise
@@ -97,7 +108,7 @@ async def sync_data(request: DataSyncRequest, background_tasks: BackgroundTasks)
 
 
 @router.get("/meta/{symbol}/{timeframe}")
-async def get_metadata(symbol: str, timeframe: str) -> Optional[SnapshotMeta]:
+async def get_metadata(symbol: str, timeframe: str) -> Optional[DatasetMetadata]:
     """Get latest metadata for symbol/timeframe.
     
     Args:
@@ -105,7 +116,7 @@ async def get_metadata(symbol: str, timeframe: str) -> Optional[SnapshotMeta]:
         timeframe: Timeframe
         
     Returns:
-        Latest SnapshotMeta or None
+        Latest DatasetMetadata or None
     """
     try:
         store = get_data_store()
