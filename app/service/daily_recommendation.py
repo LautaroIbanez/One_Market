@@ -680,6 +680,67 @@ class DailyRecommendationService:
                 "overall_status": "error"
             }
     
+    def _refresh_timeframe_data(self, symbol: str, timeframe: str, since_timestamp: int) -> Dict[str, Any]:
+        """Refresh data for a specific timeframe.
+        
+        Args:
+            symbol: Trading symbol
+            timeframe: Timeframe to refresh
+            since_timestamp: Timestamp to fetch from (with buffer)
+            
+        Returns:
+            Dictionary with refresh results
+        """
+        try:
+            from app.data.fetch import DataFetcher
+            
+            # Initialize fetcher
+            fetcher = DataFetcher()
+            
+            # Calculate buffer time (1 hour buffer)
+            buffer_ms = 60 * 60 * 1000  # 1 hour in milliseconds
+            since_with_buffer = since_timestamp - buffer_ms
+            
+            logger.info(f"Refreshing {symbol} {timeframe} from {since_with_buffer} (buffer: {buffer_ms}ms)")
+            
+            # Sync the timeframe
+            sync_result = fetcher.sync_symbol_timeframe(symbol, timeframe, force_refresh=True)
+            
+            if sync_result["success"]:
+                bars_added = sync_result.get("bars_added", 0)
+                logger.info(f"Successfully refreshed {symbol} {timeframe}: {bars_added} bars added")
+                
+                return {
+                    "success": True,
+                    "bars_added": bars_added,
+                    "message": f"Refreshed {symbol} {timeframe} with {bars_added} new bars",
+                    "timeframe": timeframe,
+                    "symbol": symbol
+                }
+            else:
+                error_msg = sync_result.get("message", "Unknown sync error")
+                logger.error(f"Failed to refresh {symbol} {timeframe}: {error_msg}")
+                
+                return {
+                    "success": False,
+                    "bars_added": 0,
+                    "message": f"Failed to refresh {symbol} {timeframe}: {error_msg}",
+                    "timeframe": timeframe,
+                    "symbol": symbol,
+                    "error": error_msg
+                }
+                
+        except Exception as e:
+            logger.error(f"Error refreshing {symbol} {timeframe}: {e}")
+            return {
+                "success": False,
+                "bars_added": 0,
+                "message": f"Error refreshing {symbol} {timeframe}: {str(e)}",
+                "timeframe": timeframe,
+                "symbol": symbol,
+                "error": str(e)
+            }
+    
     def _get_signal_based_recommendation(
         self, 
         symbol: str, 
@@ -696,9 +757,53 @@ class DailyRecommendationService:
             if not freshness_check["is_fresh"]:
                 warning_messages = "; ".join(freshness_check["warnings"])
                 logger.warning(f"Data freshness issues for {symbol}: {warning_messages}")
-                return self._create_hold_recommendation(
-                    symbol, date, f"Data freshness issues: {warning_messages}"
-                )
+                
+                # Try to refresh stale timeframes
+                refresh_results = {}
+                refresh_attempted = False
+                
+                for tf in timeframes:
+                    tf_status = freshness_check["timeframe_status"].get(tf, {})
+                    if tf_status.get("status") == "stale":
+                        logger.info(f"Attempting to refresh stale data for {symbol} {tf}")
+                        
+                        # Get the latest timestamp for this timeframe
+                        bars = self.store.read_bars(symbol, tf)
+                        if bars:
+                            latest_timestamp = bars[-1].timestamp
+                            refresh_result = self._refresh_timeframe_data(symbol, tf, latest_timestamp)
+                            refresh_results[tf] = refresh_result
+                            refresh_attempted = True
+                            
+                            if refresh_result["success"]:
+                                logger.info(f"Successfully refreshed {symbol} {tf}: {refresh_result['bars_added']} bars")
+                            else:
+                                logger.error(f"Failed to refresh {symbol} {tf}: {refresh_result.get('error', 'Unknown error')}")
+                
+                # Re-validate freshness after refresh attempt
+                if refresh_attempted:
+                    logger.info(f"Re-validating data freshness after refresh attempt for {symbol}")
+                    freshness_check = self._validate_data_freshness(symbol, date, timeframes)
+                    
+                    if not freshness_check["is_fresh"]:
+                        # Still stale after refresh attempt
+                        error_details = []
+                        for tf, result in refresh_results.items():
+                            if not result["success"]:
+                                error_details.append(f"{tf}: {result.get('error', 'Unknown error')}")
+                        
+                        error_msg = f"Data still stale after refresh attempt"
+                        if error_details:
+                            error_msg += f" - Refresh errors: {'; '.join(error_details)}"
+                        
+                        return self._create_hold_recommendation(symbol, date, error_msg)
+                    else:
+                        logger.info(f"Data is now fresh after refresh for {symbol}")
+                else:
+                    # No refresh attempted, return HOLD
+                    return self._create_hold_recommendation(
+                        symbol, date, f"Data freshness issues: {warning_messages}"
+                    )
             
             # Get current price
             current_price = self._get_current_price(symbol)

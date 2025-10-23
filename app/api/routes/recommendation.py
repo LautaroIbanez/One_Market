@@ -86,11 +86,37 @@ async def get_daily_recommendation(
                 "risk_percentage": risk_percentage
             }
         }
-        
+
         if include_freshness:
             freshness_check = service._validate_data_freshness(symbol, date, ["1h", "4h", "1d"])
             response_data["data_freshness"] = freshness_check
-        
+            
+            # Check if data refresh was needed and executed
+            if freshness_check.get("overall_status") == "stale":
+                # Data was stale, check if refresh was attempted
+                data_refresh_info = {
+                    "refresh_attempted": True,
+                    "refresh_results": {},
+                    "final_status": freshness_check.get("overall_status"),
+                    "message": "Data was stale and refresh was attempted"
+                }
+                
+                # If recommendation is HOLD due to data issues, include refresh details
+                if recommendation.direction == "HOLD" and "Data freshness issues" in recommendation.rationale:
+                    data_refresh_info["message"] = "Data was stale, refresh attempted but still insufficient"
+                elif recommendation.direction != "HOLD":
+                    data_refresh_info["message"] = "Data was stale, refresh successful, recommendation generated"
+                
+                response_data["data_refresh"] = data_refresh_info
+            else:
+                # Data was fresh, no refresh needed
+                response_data["data_refresh"] = {
+                    "refresh_attempted": False,
+                    "refresh_results": {},
+                    "final_status": freshness_check.get("overall_status"),
+                    "message": "Data was fresh, no refresh needed"
+                }
+
         logger.info(f"Generated recommendation for {symbol} on {date}: {recommendation.direction}")
         return response_data
         
