@@ -135,25 +135,61 @@ async def health_check():
 
 @app.get("/symbols", response_model=SymbolsResponse)
 async def get_symbols():
-    """Get available trading symbols from configuration and stored data."""
+    """Get available trading symbols from configuration."""
     try:
         # Get from configuration
         config_symbols = settings.DEFAULT_SYMBOLS
         
-        # Get from stored data
-        store = DataStore()
-        stored_symbols = [f"{sym}/{tf}" for sym, tf in store.list_stored_symbols()]
-        
-        # Combine and deduplicate
-        all_symbols = list(set(config_symbols + stored_symbols))
-        
         return SymbolsResponse(
-            symbols=sorted(all_symbols),
-            count=len(all_symbols)
+            symbols=sorted(config_symbols),
+            count=len(config_symbols)
         )
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching symbols: {str(e)}")
+
+
+@app.get("/data/ohlcv")
+async def get_ohlcv_data(
+    symbol: str,
+    timeframe: str = "1h",
+    limit: int = 500
+):
+    """Get OHLCV data for a symbol/timeframe."""
+    try:
+        store = DataStore()
+        bars = store.read_bars(symbol, timeframe)
+        
+        if not bars:
+            raise HTTPException(status_code=404, detail=f"No data available for {symbol} {timeframe}")
+        
+        # Convert to list of dicts and limit results
+        bars_data = [bar.to_dict() for bar in bars[-limit:]]
+        
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "bars": bars_data,
+            "count": len(bars_data)
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching OHLCV data: {str(e)}")
+
+
+@app.get("/strategies")
+async def get_strategies():
+    """Get available trading strategies."""
+    try:
+        strategies = get_strategy_list()
+        return {
+            "strategies": strategies,
+            "count": len(strategies)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching strategies: {str(e)}")
 
 
 @app.post("/signal", response_model=SignalResponse)

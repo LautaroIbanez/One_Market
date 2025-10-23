@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 import logging
 import streamlit as st
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -298,7 +299,107 @@ class BackendClient:
             True if backend is healthy, False otherwise
         """
         try:
-            response = self.session.get(f"{self.base_url}/backtest/health", timeout=5)
+            response = self.session.get(f"{self.base_url}/health", timeout=5)
             return response.status_code == 200
         except Exception:
             return False
+    
+    def wait_for_healthcheck(self, timeout: int = 30, interval: int = 2) -> bool:
+        """Wait for backend to become healthy.
+        
+        Args:
+            timeout: Maximum time to wait in seconds
+            interval: Check interval in seconds
+            
+        Returns:
+            True if backend becomes healthy, False if timeout
+        """
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            if self.check_backend_health():
+                return True
+            time.sleep(interval)
+        
+        return False
+    
+    def get_ohlcv_data(self, symbol: str, timeframe: str, limit: int = 500) -> Optional[pd.DataFrame]:
+        """Get OHLCV data from backend.
+        
+        Args:
+            symbol: Trading symbol
+            timeframe: Timeframe
+            limit: Maximum number of bars to return
+            
+        Returns:
+            DataFrame with OHLCV data or None if failed
+        """
+        try:
+            params = {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "limit": limit
+            }
+            
+            response = self.session.get(
+                f"{self.base_url}/data/ohlcv",
+                params=params,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('bars'):
+                    df = pd.DataFrame(data['bars'])
+                    df = df.sort_values('timestamp').reset_index(drop=True)
+                    return df
+                else:
+                    logger.warning(f"No OHLCV data returned for {symbol} {timeframe}")
+                    return None
+            else:
+                logger.error(f"OHLCV request failed: {response.status_code} - {response.text}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error getting OHLCV data: {e}")
+            return None
+    
+    def get_symbols(self) -> List[str]:
+        """Get available symbols from backend.
+        
+        Returns:
+            List of available symbols
+        """
+        try:
+            response = self.session.get(f"{self.base_url}/symbols", timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("symbols", [])
+            else:
+                logger.error(f"Failed to get symbols: {response.status_code}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error getting symbols: {e}")
+            return []
+    
+    def get_strategies(self) -> List[str]:
+        """Get available strategies from backend.
+        
+        Returns:
+            List of available strategies
+        """
+        try:
+            response = self.session.get(f"{self.base_url}/strategies", timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("strategies", [])
+            else:
+                logger.error(f"Failed to get strategies: {response.status_code}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error getting strategies: {e}")
+            return []

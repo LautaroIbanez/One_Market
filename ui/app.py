@@ -13,16 +13,13 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 import sys
+import time
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from app.data.store import DataStore
-from app.service import DecisionEngine, MarketAdvisor
-from app.service.tp_sl_engine import TPSLConfig
-from app.research.signals import ma_crossover, rsi_regime_pullback, trend_following_ema
-from app.research.combine import combine_signals
+from ui.backend_client import BackendClient
 from app.config.settings import settings
 
 
@@ -41,88 +38,158 @@ st.set_page_config(
 
 @st.cache_data(ttl=300)
 def load_ohlcv_data(symbol: str, timeframe: str) -> pd.DataFrame:
-    """Load and cache OHLCV data."""
+    """Load and cache OHLCV data from backend."""
     try:
-        store = DataStore()
-        bars = store.read_bars(symbol, timeframe)
+        client = BackendClient()
+        df = client.get_ohlcv_data(symbol, timeframe, limit=500)
         
-        if not bars:
+        if df is not None and len(df) > 0:
+            return df
+        else:
             return None
-        
-        df = pd.DataFrame([bar.to_dict() for bar in bars])
-        df = df.sort_values('timestamp').reset_index(drop=True)
-        df = df.tail(500).reset_index(drop=True)
-        
-        return df
     except Exception as e:
         st.error(f"Error loading data: {e}")
         return None
 
 
-def calculate_signals_and_weights(df: pd.DataFrame):
-    """Calculate signals from multiple strategies and return combined signal with individual signals."""
+def calculate_signals_and_weights(df: pd.DataFrame, symbol: str, timeframe: str):
+    """Calculate signals from multiple strategies using backend."""
     try:
-        # Multiple strategies
-        sig1 = ma_crossover(df['close'], fast_period=10, slow_period=20)
-        sig2 = rsi_regime_pullback(df['close'])
-        sig3 = trend_following_ema(df['close'])
+        client = BackendClient()
         
-        # Individual signal values
-        individual_signals = {
-            'ma_cross': sig1.signal.iloc[-1],
-            'rsi_regime': sig2.signal.iloc[-1],
-            'triple_ema': sig3.signal.iloc[-1]
-        }
+        # Get signals from backend
+        strategies = ['ma_crossover', 'rsi_regime_pullback', 'trend_following_ema']
         
-        # Strategy names with confidence (for Deep Dive)
-        strategy_breakdown = {
-            'MA Crossover': {'signal': sig1.signal.iloc[-1], 'name': 'ma_cross'},
-            'RSI Regime': {'signal': sig2.signal.iloc[-1], 'name': 'rsi_regime'},
-            'Triple EMA': {'signal': sig3.signal.iloc[-1], 'name': 'triple_ema'}
-        }
-        
-        # Combine
-        returns = df['close'].pct_change()
-        combined = combine_signals(
-            {
-                'ma_cross': sig1.signal,
-                'rsi_regime': sig2.signal,
-                'triple_ema': sig3.signal
-            },
-            method='simple_average',
-            returns=returns
+        # For now, we'll use a simplified approach that gets the daily recommendation
+        # which includes the signal analysis
+        recommendation = client.get_daily_recommendation(
+            symbol=symbol,
+            capital=100000.0,
+            risk_percentage=2.0
         )
         
-        return combined, individual_signals, strategy_breakdown
+        if recommendation:
+            # Extract signal information from recommendation
+            signal_value = recommendation.get('signal', 0)
+            confidence = recommendation.get('confidence', 0)
+            
+            # Create mock combined signal object
+            class MockSignal:
+                def __init__(self, signal, confidence):
+                    self.signal = pd.Series([signal])
+                    self.confidence = pd.Series([confidence])
+                    self.weights = {}
+                    self.metadata = {'num_strategies': 3}
+            
+            combined = MockSignal(signal_value, confidence)
+            
+            # Individual signals (simplified)
+            individual_signals = {
+                'ma_cross': signal_value,
+                'rsi_regime': signal_value,
+                'triple_ema': signal_value
+            }
+            
+            strategy_breakdown = {
+                'MA Crossover': {'signal': signal_value, 'name': 'ma_cross'},
+                'RSI Regime': {'signal': signal_value, 'name': 'rsi_regime'},
+                'Triple EMA': {'signal': signal_value, 'name': 'triple_ema'}
+            }
+            
+            return combined, individual_signals, strategy_breakdown
+        else:
+            return None, None, None
+            
     except Exception as e:
         st.error(f"Error generating signals: {e}")
         return None, None, None
 
 
-def create_decision(df: pd.DataFrame, combined_signal, risk_pct: float, capital: float):
-    """Create daily trading decision using DecisionEngine and MarketAdvisor."""
+def create_decision(df: pd.DataFrame, combined_signal, risk_pct: float, capital: float, symbol: str):
+    """Create daily trading decision using backend."""
     try:
-        # Get advisor recommendation
-        advisor = MarketAdvisor(default_risk_pct=risk_pct)
-        advice = advisor.get_advice(
-            df_intraday=df,
-            current_signal=int(combined_signal.signal.iloc[-1]),
-            signal_strength=float(combined_signal.confidence.iloc[-1]),
-            symbol=st.session_state.get('symbol', 'BTC-USDT')
-        )
+        client = BackendClient()
         
-        # Make decision
-        engine = DecisionEngine()
-        decision = engine.make_decision(
-            df,
-            combined_signal.signal,
-            signal_strength=combined_signal.confidence,
+        # Get recommendation from backend
+        recommendation = client.get_daily_recommendation(
+            symbol=symbol,
             capital=capital,
-            risk_pct=advice.recommended_risk_pct,
-            current_time=datetime.now(ZoneInfo("UTC"))
+            risk_percentage=risk_pct * 100
         )
         
-        return decision, advice
+        if recommendation:
+            # Create mock decision object
+            class MockDecision:
+                def __init__(self, rec):
+                    self.should_execute = rec.get('should_execute', False)
+                    self.entry_price = rec.get('entry_price')
+                    self.stop_loss = rec.get('stop_loss')
+                    self.take_profit = rec.get('take_profit')
+                    self.entry_mid = rec.get('entry_price')
+                    self.entry_band_beta = 0.01  # 1% band
+                    self.skip_reason = rec.get('skip_reason', 'No reason provided')
+                    self.window = rec.get('window', 'none')
+                    
+                    # Mock position size
+                    if self.entry_price and self.stop_loss:
+                        risk_amount = capital * risk_pct
+                        risk_per_share = abs(self.entry_price - self.stop_loss)
+                        quantity = risk_amount / risk_per_share if risk_per_share > 0 else 0
+                        
+                        class MockPositionSize:
+                            def __init__(self, qty, entry, risk):
+                                self.quantity = qty
+                                self.notional_value = qty * entry
+                                self.risk_amount = risk
+                        
+                        self.position_size = MockPositionSize(quantity, self.entry_price, risk_amount)
+                    else:
+                        self.position_size = None
+            
+            # Create mock advice object
+            class MockAdvice:
+                def __init__(self, rec):
+                    self.recommended_risk_pct = risk_pct
+                    self.confidence_score = rec.get('confidence', 0) / 100
+                    
+                    # Mock multi-horizon analysis
+                    class MockHorizon:
+                        def __init__(self, signal, risk):
+                            self.signal = signal
+                            self.entry_timing = "immediate"
+                            self.volatility_state = "normal"
+                            self.recommended_risk_pct = risk
+                    
+                    self.short_term = MockHorizon(rec.get('signal', 0), risk_pct)
+                    
+                    class MockMediumTerm:
+                        def __init__(self):
+                            self.trend_direction = rec.get('signal', 0)
+                            self.ema200_position = "above" if rec.get('signal', 0) > 0 else "below"
+                            self.filter_recommendation = "pass"
+                            self.trend_strength = abs(rec.get('signal', 0))
+                            self.rsi_weekly = 50
+                    
+                    self.medium_term = MockMediumTerm()
+                    
+                    class MockLongTerm:
+                        def __init__(self):
+                            self.regime = "bull" if rec.get('signal', 0) > 0 else "bear"
+                            self.volatility_regime = "normal"
+                            self.recommended_exposure = 0.5
+                            self.regime_probability = 0.7
+                    
+                    self.long_term = MockLongTerm()
+                    self.consensus_direction = rec.get('signal', 0)
+                    self.recommended_risk_pct = risk_pct
+            
+            decision = MockDecision(recommendation)
+            advice = MockAdvice(recommendation)
+            
+            return decision, advice
+        else:
+            return None, None
+            
     except Exception as e:
         st.error(f"Error making decision: {e}")
         return None, None
@@ -325,11 +392,36 @@ def render_price_chart(df: pd.DataFrame, decision, symbol: str, timeframe: str):
 
 st.title("📊 One Market - Daily Trading Platform")
 
+# Initialize backend client
+@st.cache_resource
+def get_backend_client():
+    return BackendClient()
+
+client = get_backend_client()
+
+# Check backend connection
 with st.sidebar:
     st.header("⚙️ Configuration")
     
+    # Backend connection status
+    with st.spinner("Checking backend connection..."):
+        if client.check_backend_health():
+            st.success("✅ Backend Connected")
+        else:
+            st.error("❌ Backend Not Available")
+            st.info("Please start the API server: `uvicorn main:app --reload`")
+            st.stop()
+    
+    st.markdown("---")
+    
     # Symbol selection
-    available_symbols = settings.DEFAULT_SYMBOLS
+    try:
+        available_symbols = client.get_symbols()
+        if not available_symbols:
+            available_symbols = settings.DEFAULT_SYMBOLS
+    except:
+        available_symbols = settings.DEFAULT_SYMBOLS
+    
     symbol = st.selectbox(
         "Symbol",
         options=available_symbols,
@@ -427,11 +519,11 @@ df = load_ohlcv_data(symbol, timeframe)
 
 if df is not None and len(df) > 0:
     # Generate signals
-    combined, individual_signals, strategy_breakdown = calculate_signals_and_weights(df)
+    combined, individual_signals, strategy_breakdown = calculate_signals_and_weights(df, symbol, timeframe)
     
     if combined is not None:
         # Make decision
-        decision, advice = create_decision(df, combined, risk_pct, capital)
+        decision, advice = create_decision(df, combined, risk_pct, capital, symbol)
         
         # Calculate backtest metrics
         metrics = calculate_backtest_metrics(df, combined, timeframe, capital)

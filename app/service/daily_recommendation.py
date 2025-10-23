@@ -516,9 +516,31 @@ class DailyRecommendationService:
         )
     
     def _compute_dataset_hash(self, symbol: str, date: str, timeframes: List[str]) -> str:
-        """Compute dataset hash for reproducibility."""
-        data_str = f"{symbol}_{date}_{'_'.join(timeframes)}"
-        return hashlib.md5(data_str.encode()).hexdigest()[:8]
+        """Compute dataset hash for reproducibility including timestamp metadata."""
+        try:
+            # Get latest timestamp from data store for each timeframe
+            timestamp_metadata = []
+            for tf in timeframes:
+                try:
+                    bars = self.store.read_bars(symbol, tf)
+                    if bars:
+                        latest_timestamp = max(bar.timestamp for bar in bars)
+                        timestamp_metadata.append(f"{tf}:{latest_timestamp}")
+                    else:
+                        timestamp_metadata.append(f"{tf}:none")
+                except Exception as e:
+                    logger.warning(f"Could not get timestamp for {symbol} {tf}: {e}")
+                    timestamp_metadata.append(f"{tf}:error")
+            
+            # Include timestamp metadata in hash
+            timestamp_str = "_".join(timestamp_metadata)
+            data_str = f"{symbol}_{date}_{'_'.join(timeframes)}_{timestamp_str}"
+            return hashlib.md5(data_str.encode()).hexdigest()[:8]
+        except Exception as e:
+            logger.error(f"Error computing dataset hash: {e}")
+            # Fallback to original method
+            data_str = f"{symbol}_{date}_{'_'.join(timeframes)}"
+            return hashlib.md5(data_str.encode()).hexdigest()[:8]
     
     def _compute_params_hash(self) -> str:
         """Compute parameters hash."""

@@ -16,6 +16,7 @@ from app.data.fetch import DataFetcher
 from app.data.store import DataStore
 from app.data.last_update import record_data_update
 from app.config.settings import settings
+import sqlite3
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -26,6 +27,35 @@ def setup_logging(verbose: bool = False) -> None:
         format='%(asctime)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
+
+
+def _invalidate_recommendation_cache(symbol: str, timeframe: str):
+    """Invalidate recommendation cache for a specific symbol/timeframe."""
+    logger = logging.getLogger(__name__)
+    
+    try:
+        store = DataStore()
+        db_path = store.base_path / "recommendations.db"
+        
+        if db_path.exists():
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Delete recommendations for this symbol
+                cursor.execute(
+                    "DELETE FROM recommendations WHERE symbol = ?",
+                    (symbol,)
+                )
+                
+                deleted_count = cursor.rowcount
+                conn.commit()
+                
+                logger.info(f"Invalidated {deleted_count} cached recommendations for {symbol}")
+        else:
+            logger.info("No recommendation database found to invalidate")
+            
+    except Exception as e:
+        logger.error(f"Error invalidating recommendation cache: {e}")
 
 
 def sync_data(
@@ -109,6 +139,9 @@ def sync_data(
                 latest_price=latest_bar.close,
                 success=True
             )
+            
+            # Invalidate recommendation cache for this symbol/timeframe
+            _invalidate_recommendation_cache(symbol, timeframe)
             
             # Check if data is recent
             time_diff = now_utc - latest_utc

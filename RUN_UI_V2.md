@@ -1,6 +1,24 @@
 # 🚀 Ejecutar One Market UI v2.0
 
-## Comando Rápido
+## Orden de Arranque Correcto
+
+### 1. Iniciar Backend API (Requerido)
+```powershell
+uvicorn main:app --reload --port 8000
+```
+
+### 2. Verificar que la API esté funcionando
+```powershell
+curl http://localhost:8000/health
+```
+Debería devolver: `{"status": "healthy"}`
+
+### 3. Iniciar UI (En terminal separado)
+```powershell
+streamlit run ui/app.py
+```
+
+## Comando Rápido (Solo si ya tienes la API corriendo)
 
 ```powershell
 streamlit run ui/app.py
@@ -31,6 +49,16 @@ streamlit run ui/app.py
 
 ## Troubleshooting
 
+### Error: "Backend Not Available" / "❌ Backend Not Available"
+**Solución**: Asegúrate de que la API esté corriendo primero
+```powershell
+# Terminal 1: Iniciar API
+uvicorn main:app --reload --port 8000
+
+# Terminal 2: Iniciar UI
+streamlit run ui/app.py
+```
+
 ### Error: "No hay datos disponibles"
 **Solución**: Ejecutar primero el script de fetch de datos
 ```powershell
@@ -47,6 +75,16 @@ pip install -r requirements.txt
 **Solución**: Cerrar otras instancias de Streamlit o usar otro puerto
 ```powershell
 streamlit run ui/app.py --server.port 8502
+```
+
+### Error: "Connection refused" en la UI
+**Solución**: Verificar que la API esté corriendo en el puerto correcto
+```powershell
+# Verificar que la API esté corriendo
+curl http://localhost:8000/health
+
+# Si no responde, reiniciar la API
+uvicorn main:app --reload --port 8000
 ```
 
 ## Acceso
