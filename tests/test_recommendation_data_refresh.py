@@ -403,6 +403,146 @@ class TestDataRefresh:
                 # Should not be HOLD due to data freshness issues
                 assert "Data freshness issues" not in recommendation.rationale
                 assert "Data still stale after refresh attempt" not in recommendation.rationale
+    
+    def test_refresh_with_bars_added_zero_handling(self):
+        """Test that bars_added=0 is handled as error with fallback."""
+        # Mock sync result with bars_added=0
+        mock_sync_result = {
+            "success": True,
+            "bars_added": 0,
+            "message": "Sync successful but no new bars"
+        }
+        
+        # Mock fallback result
+        mock_fallback_bars = [
+            OHLCVBar(
+                timestamp=int((datetime.now(timezone.utc) - timedelta(hours=1)).timestamp() * 1000),
+                open=50000.0,
+                high=51000.0,
+                low=49000.0,
+                close=50500.0,
+                volume=1000.0,
+                symbol="BTC/USDT",
+                timeframe="1h"
+            )
+        ]
+        
+        with patch.object(self.service, 'fetcher') as mock_fetcher:
+            mock_fetcher.sync_symbol_timeframe.return_value = mock_sync_result
+            mock_fetcher.fetch_incremental.return_value = mock_fallback_bars
+            
+            # Test refresh
+            result = self.service._refresh_timeframe_data(
+                self.symbol, "1h", 1704067200000
+            )
+            
+            # Verify fallback was attempted
+            assert result["success"] is True
+            assert result["bars_added"] == 1
+            assert result["attempts"] == 2
+            assert result["method"] == "fallback_incremental"
+            assert "Fallback successful" in result["message"]
+            
+            # Verify both methods were called
+            mock_fetcher.sync_symbol_timeframe.assert_called_once()
+            mock_fetcher.fetch_incremental.assert_called_once()
+    
+    def test_refresh_with_fallback_failure(self):
+        """Test that fallback failure is handled correctly."""
+        # Mock sync result with bars_added=0
+        mock_sync_result = {
+            "success": True,
+            "bars_added": 0,
+            "message": "Sync successful but no new bars"
+        }
+        
+        with patch.object(self.service, 'fetcher') as mock_fetcher:
+            mock_fetcher.sync_symbol_timeframe.return_value = mock_sync_result
+            mock_fetcher.fetch_incremental.return_value = []  # No bars returned
+            
+            # Test refresh
+            result = self.service._refresh_timeframe_data(
+                self.symbol, "1h", 1704067200000
+            )
+            
+            # Verify fallback failure is handled
+            assert result["success"] is False
+            assert result["bars_added"] == 0
+            assert result["attempts"] == 2
+            assert result["method"] == "light_sync_fallback"
+            assert "No new bars after 2 attempts" in result["message"]
+            assert result["error"] == "No new data available"
+    
+    def test_signal_based_recommendation_with_full_job_escalation(self):
+        """Test that full job escalation works when refresh fails."""
+        # Mock stale data initially
+        stale_bars = [
+            OHLCVBar(
+                timestamp=1704067200000,  # Old timestamp
+                open=50000.0,
+                high=51000.0,
+                low=49000.0,
+                close=50500.0,
+                volume=1000.0,
+                symbol="BTC/USDT",
+                timeframe="1h"
+            )
+        ]
+        
+        # Mock fresh data after full job
+        fresh_bars = [
+            OHLCVBar(
+                timestamp=int((datetime.now(timezone.utc) - timedelta(minutes=30)).timestamp() * 1000),
+                open=50500.0,
+                high=51500.0,
+                low=50000.0,
+                close=51000.0,
+                volume=1200.0,
+                symbol="BTC/USDT",
+                timeframe="1h"
+            )
+        ]
+        
+        # Mock store responses (stale -> stale -> fresh)
+        self.mock_store.read_bars.side_effect = [stale_bars, stale_bars, fresh_bars]
+        
+        # Mock failed refresh
+        mock_refresh_result = {
+            "success": False,
+            "bars_added": 0,
+            "message": "Refresh failed"
+        }
+        
+        # Mock successful full job
+        mock_job_result = {
+            self.symbol: {
+                "1h": {"success": True, "bars_added": 10},
+                "4h": {"success": True, "bars_added": 5}
+            }
+        }
+        
+        with patch.object(self.service, '_refresh_timeframe_data', return_value=mock_refresh_result):
+            with patch('app.jobs.update_data_job.UpdateDataJob') as mock_job_class:
+                mock_job = Mock()
+                mock_job.run_for_symbol.return_value = mock_job_result
+                mock_job_class.return_value = mock_job
+                
+                with patch.object(self.service, '_get_current_price', return_value=51000.0):
+                    # Generate recommendation
+                    recommendation = self.service._get_signal_based_recommendation(
+                        self.symbol, self.date, self.timeframes
+                    )
+                    
+                    # Verify full job was called
+                    mock_job.run_for_symbol.assert_called_once_with(self.symbol, self.timeframes)
+                    
+                    # Verify recommendation was generated (not HOLD due to stale data)
+                    assert recommendation is not None
+                    assert recommendation.symbol == self.symbol
+                    assert recommendation.date == self.date
+                    # Should not be HOLD due to data freshness issues
+                    assert "Data freshness issues" not in recommendation.rationale
+                    assert "Data still stale after 3 attempts" not in recommendation.rationale
 
 
 class TestDataRefreshIntegration:

@@ -681,7 +681,7 @@ class DailyRecommendationService:
             }
     
     def _refresh_timeframe_data(self, symbol: str, timeframe: str, since_timestamp: int) -> Dict[str, Any]:
-        """Refresh data for a specific timeframe.
+        """Refresh data for a specific timeframe with fallback mechanisms.
         
         Args:
             symbol: Trading symbol
@@ -689,12 +689,13 @@ class DailyRecommendationService:
             since_timestamp: Timestamp to fetch from (with buffer)
             
         Returns:
-            Dictionary with refresh results
+            Dictionary with refresh results including fallback attempts
         """
         try:
-            # Initialize fetcher
-            from app.data.fetch import DataFetcher
-            fetcher = DataFetcher()
+            # Use existing fetcher instead of creating new one
+            if not hasattr(self, 'fetcher'):
+                from app.data.fetch import DataFetcher
+                self.fetcher = DataFetcher()
             
             # Calculate buffer time (1 hour buffer)
             buffer_ms = 60 * 60 * 1000  # 1 hour in milliseconds
@@ -705,22 +706,82 @@ class DailyRecommendationService:
             # Convert timestamp to datetime for sync
             since_datetime = datetime.fromtimestamp(since_with_buffer / 1000, tz=timezone.utc)
             
-            # Sync the timeframe
-            sync_result = fetcher.sync_symbol_timeframe(
+            # Phase 1: Light sync
+            sync_result = self.fetcher.sync_symbol_timeframe(
                 symbol, timeframe, force_refresh=True, since=since_datetime
             )
             
-            if sync_result["success"]:
-                bars_added = sync_result.get("bars_added", 0)
+            bars_added = sync_result.get("bars_added", 0)
+            attempts = 1
+            
+            if sync_result["success"] and bars_added > 0:
                 logger.info(f"Successfully refreshed {symbol} {timeframe}: {bars_added} bars added")
-                
                 return {
                     "success": True,
                     "bars_added": bars_added,
                     "message": f"Refreshed {symbol} {timeframe} with {bars_added} new bars",
                     "timeframe": timeframe,
-                    "symbol": symbol
+                    "symbol": symbol,
+                    "attempts": attempts,
+                    "method": "light_sync"
                 }
+            elif sync_result["success"] and bars_added == 0:
+                logger.warning(f"Light sync successful but no new bars for {symbol} {timeframe}")
+                
+                # Phase 2: Fallback with fetch_incremental (last 7 days)
+                logger.info(f"Attempting fallback incremental fetch for {symbol} {timeframe}")
+                attempts += 1
+                
+                try:
+                    # Fetch last 7 days of data
+                    fallback_since = datetime.now(timezone.utc) - timedelta(days=7)
+                    bars = self.fetcher.fetch_incremental(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        since=fallback_since,
+                        until=datetime.now(timezone.utc)
+                    )
+                    
+                    if bars and len(bars) > 0:
+                        # Write bars to store
+                        meta = self.store.write_bars(bars, mode="append")
+                        bars_added = len(bars)
+                        
+                        logger.info(f"Fallback successful: {bars_added} bars added for {symbol} {timeframe}")
+                        return {
+                            "success": True,
+                            "bars_added": bars_added,
+                            "message": f"Fallback successful: {bars_added} bars added for {symbol} {timeframe}",
+                            "timeframe": timeframe,
+                            "symbol": symbol,
+                            "attempts": attempts,
+                            "method": "fallback_incremental"
+                        }
+                    else:
+                        logger.warning(f"Fallback incremental fetch returned no data for {symbol} {timeframe}")
+                        return {
+                            "success": False,
+                            "bars_added": 0,
+                            "message": f"No new bars after {attempts} attempts (light sync + fallback) for {symbol} {timeframe}",
+                            "timeframe": timeframe,
+                            "symbol": symbol,
+                            "attempts": attempts,
+                            "method": "light_sync_fallback",
+                            "error": "No new data available"
+                        }
+                        
+                except Exception as fallback_error:
+                    logger.error(f"Fallback incremental fetch failed for {symbol} {timeframe}: {fallback_error}")
+                    return {
+                        "success": False,
+                        "bars_added": 0,
+                        "message": f"Fallback failed after {attempts} attempts for {symbol} {timeframe}: {str(fallback_error)}",
+                        "timeframe": timeframe,
+                        "symbol": symbol,
+                        "attempts": attempts,
+                        "method": "light_sync_fallback",
+                        "error": str(fallback_error)
+                    }
             else:
                 error_msg = sync_result.get("message", "Unknown sync error")
                 logger.error(f"Failed to refresh {symbol} {timeframe}: {error_msg}")
@@ -731,6 +792,8 @@ class DailyRecommendationService:
                     "message": f"Failed to refresh {symbol} {timeframe}: {error_msg}",
                     "timeframe": timeframe,
                     "symbol": symbol,
+                    "attempts": attempts,
+                    "method": "light_sync",
                     "error": error_msg
                 }
                 
@@ -742,6 +805,8 @@ class DailyRecommendationService:
                 "message": f"Error refreshing {symbol} {timeframe}: {str(e)}",
                 "timeframe": timeframe,
                 "symbol": symbol,
+                "attempts": 1,
+                "method": "light_sync",
                 "error": str(e)
             }
     
@@ -786,21 +851,69 @@ class DailyRecommendationService:
                 
                 # Re-validate freshness after refresh attempt
                 if refresh_attempted:
+                    # Invalidate cache to ensure fresh data is read
+                    self.store.refresh_symbol_cache(symbol, timeframes)
+                    
                     logger.info(f"Re-validating data freshness after refresh attempt for {symbol}")
                     freshness_check = self._validate_data_freshness(symbol, date, timeframes)
                     
                     if not freshness_check["is_fresh"]:
-                        # Still stale after refresh attempt
-                        error_details = []
-                        for tf, result in refresh_results.items():
-                            if not result["success"]:
-                                error_details.append(f"{tf}: {result.get('error', 'Unknown error')}")
+                        # Phase 3: Second escalation with UpdateDataJob
+                        logger.warning(f"Data still stale after refresh attempt for {symbol}, attempting full job")
                         
-                        error_msg = f"Data still stale after refresh attempt"
-                        if error_details:
-                            error_msg += f" - Refresh errors: {'; '.join(error_details)}"
-                        
-                        return self._create_hold_recommendation(symbol, date, error_msg)
+                        try:
+                            from app.jobs.update_data_job import UpdateDataJob
+                            
+                            # Run full update job for the symbol
+                            job = UpdateDataJob()
+                            job_result = job.run_for_symbol(symbol, timeframes)
+                            
+                            # Invalidate cache again after job
+                            self.store.refresh_symbol_cache(symbol, timeframes)
+                            
+                            # Third validation
+                            logger.info(f"Third validation after full job for {symbol}")
+                            freshness_check = self._validate_data_freshness(symbol, date, timeframes)
+                            
+                            if not freshness_check["is_fresh"]:
+                                # Still stale after all attempts
+                                error_details = []
+                                for tf, result in refresh_results.items():
+                                    if not result["success"]:
+                                        error_details.append(f"{tf}: {result.get('error', 'Unknown error')}")
+                                
+                                # Add job results to error details
+                                job_errors = []
+                                for tf in timeframes:
+                                    if tf in job_result.get(symbol, {}):
+                                        tf_result = job_result[symbol][tf]
+                                        if not tf_result.get("success", False):
+                                            job_errors.append(f"{tf}: {tf_result.get('error', 'Job failed')}")
+                                
+                                error_msg = f"Data still stale after 3 attempts (light sync + fallback + full job)"
+                                if error_details:
+                                    error_msg += f" - Refresh errors: {'; '.join(error_details)}"
+                                if job_errors:
+                                    error_msg += f" - Job errors: {'; '.join(job_errors)}"
+                                
+                                return self._create_hold_recommendation(symbol, date, error_msg)
+                            else:
+                                logger.info(f"Data is now fresh after full job for {symbol}")
+                                
+                        except Exception as job_error:
+                            logger.error(f"Full job failed for {symbol}: {job_error}")
+                            
+                            # Still stale after refresh attempt
+                            error_details = []
+                            for tf, result in refresh_results.items():
+                                if not result["success"]:
+                                    error_details.append(f"{tf}: {result.get('error', 'Unknown error')}")
+                            
+                            error_msg = f"Data still stale after refresh attempt and full job failed: {str(job_error)}"
+                            if error_details:
+                                error_msg += f" - Refresh errors: {'; '.join(error_details)}"
+                            
+                            return self._create_hold_recommendation(symbol, date, error_msg)
                     else:
                         logger.info(f"Data is now fresh after refresh for {symbol}")
                 else:

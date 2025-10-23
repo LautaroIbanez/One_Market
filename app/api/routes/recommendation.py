@@ -98,7 +98,12 @@ async def get_daily_recommendation(
                     "refresh_attempted": True,
                     "refresh_results": {},
                     "final_status": freshness_check.get("overall_status"),
-                    "message": "Data was stale and refresh was attempted"
+                    "message": "Data was stale and refresh was attempted",
+                    "escalation_phases": {
+                        "light_sync": {"attempted": False, "success": False, "bars_added": 0},
+                        "fallback_incremental": {"attempted": False, "success": False, "bars_added": 0},
+                        "full_job": {"attempted": False, "success": False, "bars_added": 0}
+                    }
                 }
                 
                 # If recommendation is HOLD due to data issues, include refresh details
