@@ -114,77 +114,100 @@ def create_decision(df: pd.DataFrame, combined_signal, risk_pct: float, capital:
         recommendation = client.get_daily_recommendation(
             symbol=symbol,
             capital=capital,
-            risk_percentage=risk_pct * 100
+            risk_percentage=risk_pct * 100,
+            include_freshness=True
         )
         
-        if recommendation:
-            # Create mock decision object
-            class MockDecision:
-                def __init__(self, rec):
-                    self.should_execute = rec.get('should_execute', False)
-                    self.entry_price = rec.get('entry_price')
-                    self.stop_loss = rec.get('stop_loss')
-                    self.take_profit = rec.get('take_profit')
-                    self.entry_mid = rec.get('entry_price')
-                    self.entry_band_beta = 0.01  # 1% band
-                    self.skip_reason = rec.get('skip_reason', 'No reason provided')
-                    self.window = rec.get('window', 'none')
+        if recommendation and recommendation.get('recommendation'):
+            rec = recommendation['recommendation']
+            
+            # Create decision object from real backend data
+            class RealDecision:
+                def __init__(self, rec_data):
+                    # Extract direction and convert to should_execute
+                    direction = rec_data.get('direction', 'HOLD')
+                    self.should_execute = direction != 'HOLD'
                     
-                    # Mock position size
-                    if self.entry_price and self.stop_loss:
-                        risk_amount = capital * risk_pct
-                        risk_per_share = abs(self.entry_price - self.stop_loss)
-                        quantity = risk_amount / risk_per_share if risk_per_share > 0 else 0
-                        
-                        class MockPositionSize:
+                    # Extract signal from direction
+                    if direction == 'LONG':
+                        self.signal = 1
+                    elif direction == 'SHORT':
+                        self.signal = -1
+                    else:
+                        self.signal = 0
+                    
+                    # Extract real fields from backend
+                    self.entry_price = rec_data.get('entry_price')
+                    self.stop_loss = rec_data.get('stop_loss')
+                    self.take_profit = rec_data.get('take_profit')
+                    self.entry_mid = rec_data.get('entry_price')  # Use entry_price as mid
+                    self.entry_band_beta = 0.01  # Default band
+                    self.skip_reason = rec_data.get('rationale', 'No reason provided')
+                    self.window = 'A'  # Default window
+                    
+                    # Extract position size from backend
+                    quantity = rec_data.get('quantity')
+                    risk_amount = rec_data.get('risk_amount')
+                    
+                    if quantity and self.entry_price:
+                        class RealPositionSize:
                             def __init__(self, qty, entry, risk):
                                 self.quantity = qty
                                 self.notional_value = qty * entry
                                 self.risk_amount = risk
                         
-                        self.position_size = MockPositionSize(quantity, self.entry_price, risk_amount)
+                        self.position_size = RealPositionSize(quantity, self.entry_price, risk_amount or 0)
                     else:
                         self.position_size = None
             
-            # Create mock advice object
-            class MockAdvice:
-                def __init__(self, rec):
+            # Create advice object from real backend data
+            class RealAdvice:
+                def __init__(self, rec_data):
                     self.recommended_risk_pct = risk_pct
-                    self.confidence_score = rec.get('confidence', 0) / 100
+                    self.confidence_score = rec_data.get('confidence', 0) / 100
                     
-                    # Mock multi-horizon analysis
-                    class MockHorizon:
-                        def __init__(self, signal, risk):
-                            self.signal = signal
+                    # Extract signal from direction
+                    direction = rec_data.get('direction', 'HOLD')
+                    if direction == 'LONG':
+                        signal = 1
+                    elif direction == 'SHORT':
+                        signal = -1
+                    else:
+                        signal = 0
+                    
+                    # Multi-horizon analysis from real data
+                    class RealHorizon:
+                        def __init__(self, signal_val, risk):
+                            self.signal = signal_val
                             self.entry_timing = "immediate"
                             self.volatility_state = "normal"
                             self.recommended_risk_pct = risk
                     
-                    self.short_term = MockHorizon(rec.get('signal', 0), risk_pct)
+                    self.short_term = RealHorizon(signal, risk_pct)
                     
-                    class MockMediumTerm:
-                        def __init__(self):
-                            self.trend_direction = rec.get('signal', 0)
-                            self.ema200_position = "above" if rec.get('signal', 0) > 0 else "below"
+                    class RealMediumTerm:
+                        def __init__(self, signal_val):
+                            self.trend_direction = signal_val
+                            self.ema200_position = "above" if signal_val > 0 else "below"
                             self.filter_recommendation = "pass"
-                            self.trend_strength = abs(rec.get('signal', 0))
+                            self.trend_strength = abs(signal_val)
                             self.rsi_weekly = 50
                     
-                    self.medium_term = MockMediumTerm()
+                    self.medium_term = RealMediumTerm(signal)
                     
-                    class MockLongTerm:
-                        def __init__(self):
-                            self.regime = "bull" if rec.get('signal', 0) > 0 else "bear"
+                    class RealLongTerm:
+                        def __init__(self, signal_val):
+                            self.regime = "bull" if signal_val > 0 else "bear"
                             self.volatility_regime = "normal"
                             self.recommended_exposure = 0.5
                             self.regime_probability = 0.7
                     
-                    self.long_term = MockLongTerm()
-                    self.consensus_direction = rec.get('signal', 0)
+                    self.long_term = RealLongTerm(signal)
+                    self.consensus_direction = signal
                     self.recommended_risk_pct = risk_pct
             
-            decision = MockDecision(recommendation)
-            advice = MockAdvice(recommendation)
+            decision = RealDecision(rec)
+            advice = RealAdvice(rec)
             
             return decision, advice
         else:
@@ -734,153 +757,70 @@ if df is not None and len(df) > 0:
                 # No trade today - Show recommendation with real engine calculations
                 st.subheader("🔮 Plan de Trading (Basado en Motores Reales)")
                 
-                if decision and decision.skip_reason:
+                # Use the already parsed recommendation from create_decision
+                if decision:
                     # Show skip reason with explanation
-                    if "trading hours" in decision.skip_reason.lower():
-                        st.warning(f"⏰ **Operación Bloqueada:** {decision.skip_reason}")
-                        st.info("💡 **Explicación:** Las operaciones solo se ejecutan durante ventanas A (09:00-12:30) y B (14:00-17:00) UTC-3.")
-                    else:
-                        st.warning(f"⏸️ **Operación Bloqueada:** {decision.skip_reason}")
-                else:
-                    st.info("⏸️ **No hay trade hoy.** Esperando mejores condiciones.")
-                
-                # Get recommendation from backend with real engines
-                try:
-                    recommendation = client.get_daily_recommendation(symbol, include_freshness=True)
-                    
-                    if recommendation and recommendation.get('recommendation'):
-                        rec = recommendation['recommendation']
-                        
-                        # Show recommendation details even if it's HOLD
-                        if rec.get('direction') != 'HOLD':
-                            st.markdown("---")
-                            st.markdown("### 📋 Plan de Trading Calculado por Motores Reales")
-                            
-                            col1, col2 = st.columns(2)
-                            
-                            with col1:
-                                st.markdown("**📍 Entrada**")
-                                if rec.get('entry_price'):
-                                    st.metric("Precio de Entrada", f"${rec['entry_price']:,.2f}")
-                                
-                                if rec.get('entry_band'):
-                                    entry_low, entry_high = rec['entry_band']
-                                    st.metric("Rango de Entrada", f"${entry_low:,.2f} - ${entry_high:,.2f}")
-                                
-                                st.metric("Dirección", rec.get('direction', 'N/A'))
-                                st.metric("Confianza", f"{rec.get('confidence', 0)}%")
-                            
-                            with col2:
-                                st.markdown("**🛡️ Gestión de Riesgo**")
-                                if rec.get('stop_loss'):
-                                    st.metric("Stop Loss", f"${rec['stop_loss']:,.2f}")
-                                if rec.get('take_profit'):
-                                    st.metric("Take Profit", f"${rec['take_profit']:,.2f}")
-                                
-                                # Calculate R/R ratio
-                                if rec.get('stop_loss') and rec.get('take_profit') and rec.get('entry_price'):
-                                    risk = abs(rec['entry_price'] - rec['stop_loss'])
-                                    reward = abs(rec['take_profit'] - rec['entry_price'])
-                                    rr = reward / risk if risk > 0 else 0
-                                    st.metric("R/R Ratio", f"{rr:.2f}")
-                            
-                            # Position details
-                            if rec.get('quantity'):
-                                st.markdown("**💼 Posición**")
-                                col1, col2, col3 = st.columns(3)
-                                with col1:
-                                    st.metric("Cantidad", f"{rec['quantity']:.4f}")
-                                with col2:
-                                    if rec.get('entry_price'):
-                                        notional = rec['quantity'] * rec['entry_price']
-                                        st.metric("Valor Nocional", f"${notional:,.2f}")
-                                with col3:
-                                    if rec.get('risk_amount'):
-                                        st.metric("Riesgo", f"${rec['risk_amount']:,.2f}")
-                            
-                            # Engine analysis details
-                            if rec.get('mtf_analysis', {}).get('engine_analysis'):
-                                engine_analysis = rec['mtf_analysis']['engine_analysis']
-                                st.markdown("**🔧 Análisis de Motores**")
-                                col1, col2, col3 = st.columns(3)
-                                
-                                with col1:
-                                    st.metric("Método Entry", engine_analysis.get('entry_method', 'N/A'))
-                                    st.metric("Beta Entry", f"{engine_analysis.get('entry_beta', 0):.4f}")
-                                
-                                with col2:
-                                    st.metric("Método TP/SL", engine_analysis.get('tp_sl_method', 'N/A'))
-                                    st.metric("ATR Value", f"{engine_analysis.get('atr_value', 0):.2f}")
-                                
-                                with col3:
-                                    st.metric("R/R Engine", f"{engine_analysis.get('risk_reward_ratio', 0):.2f}")
-                                    st.metric("Range %", f"{engine_analysis.get('entry_range_pct', 0):.2%}")
-                            
-                            # Data freshness info
-                            if recommendation.get('data_freshness'):
-                                freshness = recommendation['data_freshness']
-                                if not freshness.get('is_fresh', True):
-                                    st.warning("⚠️ **Datos Obsoletos:** " + "; ".join(freshness.get('warnings', [])))
-                                else:
-                                    st.success("✅ **Datos Frescos:** Información actualizada")
-                            
-                            st.info("ℹ️ **Nota:** Este plan está calculado con motores reales (EntryBand + TpSl). Puedes usarlo como referencia para trading manual.")
+                    if decision.skip_reason and decision.skip_reason != 'No reason provided':
+                        if "trading hours" in decision.skip_reason.lower():
+                            st.warning(f"⏰ **Operación Bloqueada:** {decision.skip_reason}")
+                            st.info("💡 **Explicación:** Las operaciones solo se ejecutan durante ventanas A (09:00-12:30) y B (14:00-17:00) UTC-3.")
                         else:
-                            st.info("ℹ️ **Recomendación HOLD:** No hay señales de trading en este momento.")
+                            st.warning(f"⏸️ **Operación Bloqueada:** {decision.skip_reason}")
+                    else:
+                        st.info("⏸️ **No hay trade hoy.** Esperando mejores condiciones.")
                     
-                except Exception as e:
-                    st.error(f"❌ Error obteniendo recomendación del backend: {str(e)}")
-                    
-                    # Fallback to old hypothetical plan calculation
-                    signal_value = int(combined.signal.iloc[-1])
-                    
-                    if signal_value != 0 and decision:
-                        from app.service.decision import DecisionEngine
-                        
+                    # Always show the calculated levels as reference
+                    if decision.entry_price or decision.stop_loss or decision.take_profit:
                         st.markdown("---")
-                        st.markdown("### 📋 Plan Hipotético (Fallback)")
+                        st.markdown("### 📋 Plan de Trading Calculado por Motores Reales")
                         
-                        try:
-                            engine = DecisionEngine()
-                            hypo_plan = engine.calculate_hypothetical_plan(
-                                df=df,
-                                signal=signal_value,
-                                signal_strength=float(combined.confidence.iloc[-1]),
-                                capital=capital,
-                                risk_pct=risk_pct
-                            )
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown("**📍 Entrada**")
+                            if decision.entry_price:
+                                st.metric("Precio de Entrada", f"${decision.entry_price:,.2f}")
                             
-                            if hypo_plan.get('has_plan'):
-                                col1, col2 = st.columns(2)
-                                
-                                with col1:
-                                    st.markdown("**📍 Entrada Hipotética**")
-                                    st.metric("Precio de Entrada", f"${hypo_plan['entry_price']:,.2f}", 
-                                             delta=f"{hypo_plan['distance_to_entry_pct']:.2f}% del precio actual")
-                                    st.metric("Dirección", hypo_plan['side'])
-                                    st.metric("Confianza", f"{hypo_plan['signal_strength']:.1%}")
-                                
-                                with col2:
-                                    st.markdown("**🛡️ Niveles de Riesgo**")
-                                    st.metric("Stop Loss", f"${hypo_plan['stop_loss']:,.2f}")
-                                    st.metric("Take Profit", f"${hypo_plan['take_profit']:,.2f}")
-                                    st.metric("R/R Ratio", f"{hypo_plan['risk_reward_ratio']:.2f}")
-                                
-                                st.markdown("**💼 Posición Propuesta**")
-                                col1, col2, col3 = st.columns(3)
-                                with col1:
-                                    st.metric("Cantidad", f"{hypo_plan['position_size']['quantity']:.4f}")
-                                with col2:
-                                    st.metric("Valor", f"${hypo_plan['position_size']['notional']:,.2f}")
-                                with col3:
-                                    st.metric("Riesgo", f"${hypo_plan['position_size']['risk_amount']:,.2f}")
-                                
-                                st.info("ℹ️ **Nota:** Este es un plan hipotético (fallback). No se ejecutará automáticamente.")
-                            else:
-                                st.warning(f"⚠️ No se pudo calcular plan hipotético: {hypo_plan.get('reason', 'Unknown')}")
+                            if decision.entry_mid:
+                                st.metric("Entry Mid", f"${decision.entry_mid:,.2f}")
+                            
+                            # Show signal direction
+                            signal_text = "LONG" if decision.signal > 0 else "SHORT" if decision.signal < 0 else "HOLD"
+                            st.metric("Dirección", signal_text)
+                            
+                            if advice:
+                                st.metric("Confianza", f"{advice.confidence_score:.1%}")
                         
-                        except Exception as e2:
-                            st.error(f"❌ Error calculando plan hipotético: {str(e2)}")
+                        with col2:
+                            st.markdown("**🛡️ Gestión de Riesgo**")
+                            if decision.stop_loss:
+                                st.metric("Stop Loss", f"${decision.stop_loss:,.2f}")
+                            if decision.take_profit:
+                                st.metric("Take Profit", f"${decision.take_profit:,.2f}")
+                            
+                            # Calculate R/R ratio
+                            if decision.stop_loss and decision.take_profit and decision.entry_price:
+                                risk = abs(decision.entry_price - decision.stop_loss)
+                                reward = abs(decision.take_profit - decision.entry_price)
+                                rr = reward / risk if risk > 0 else 0
+                                st.metric("R/R Ratio", f"{rr:.2f}")
+                        
+                        # Position details
+                        if decision.position_size:
+                            st.markdown("**💼 Posición**")
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Cantidad", f"{decision.position_size.quantity:.4f}")
+                            with col2:
+                                st.metric("Valor Nocional", f"${decision.position_size.notional_value:,.2f}")
+                            with col3:
+                                st.metric("Riesgo", f"${decision.position_size.risk_amount:,.2f}")
+                        
+                        st.info("ℹ️ **Nota:** Este plan está calculado con motores reales (EntryBand + TpSl). Puedes usarlo como referencia para trading manual.")
+                    else:
+                        st.info("ℹ️ **Recomendación HOLD:** No hay señales de trading en este momento.")
+                else:
+                    st.warning("⚠️ **No se pudo obtener recomendación del backend.**")
             
             st.markdown("---")
             
