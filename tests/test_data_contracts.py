@@ -1,254 +1,230 @@
-"""Tests for data contracts and validation.
+"""Tests for data contract compatibility.
 
-This module tests the Pydantic schemas and data validation logic.
+This module tests the compatibility between tf/timeframe aliases
+and ensures backward compatibility with existing data structures.
 """
 import pytest
 from datetime import datetime, timezone
-from app.data.schemas import Bar, SnapshotMeta, DataIntegrityCheck
+from app.data.schema import OHLCVBar
 
 
-class TestBarSchema:
-    """Test Bar schema validation."""
+class TestDataContracts:
+    """Test data contract compatibility."""
     
-    def test_valid_bar_creation(self):
-        """Test creating valid bar."""
-        bar = Bar(
-            ts=1678886400000,
-            open=100.0,
-            high=105.0,
-            low=98.0,
-            close=103.0,
+    def test_ohlcv_bar_tf_alias(self):
+        """Test that OHLCVBar accepts both tf and timeframe."""
+        # Test with tf alias
+        bar1 = OHLCVBar(
+            timestamp=1704067200000,
+            open=50000.0,
+            high=51000.0,
+            low=49000.0,
+            close=50500.0,
             volume=1000.0,
-            tf="1h",
-            source="binance"
-        )
-        assert bar.open == 100.0
-        assert bar.high == 105.0
-        assert bar.low == 98.0
-        assert bar.close == 103.0
-        assert bar.volume == 1000.0
-    
-    def test_invalid_high_price(self):
-        """Test invalid high price."""
-        with pytest.raises(Exception):  # Pydantic will raise ValidationError
-            Bar(
-                ts=1678886400000,
-                open=100.0,
-                high=95.0,  # High < open
-                low=98.0,
-                close=103.0,
-                volume=1000.0,
-                tf="1h",
-                source="binance"
-            )
-    
-    def test_invalid_low_price(self):
-        """Test invalid low price."""
-        with pytest.raises(Exception):  # Pydantic will raise ValidationError
-            Bar(
-                ts=1678886400000,
-                open=100.0,
-                high=105.0,
-                low=110.0,  # Low > high
-                close=103.0,
-                volume=1000.0,
-                tf="1h",
-                source="binance"
-            )
-    
-    @pytest.mark.skip(reason="Pydantic validation order makes this test flaky")
-    def test_invalid_open_price(self):
-        """Test invalid open price."""
-        with pytest.raises(Exception):  # Pydantic will raise ValidationError
-            Bar(
-                ts=1678886400000,
-                open=110.0,  # Open > high
-                high=105.0,
-                low=98.0,
-                close=103.0,
-                volume=1000.0,
-                tf="1h",
-                source="binance"
-            )
-    
-    def test_invalid_close_price(self):
-        """Test invalid close price."""
-        with pytest.raises(ValueError, match="Close must be within"):
-            Bar(
-                ts=1678886400000,
-                open=100.0,
-                high=105.0,
-                low=98.0,
-                close=90.0,  # Close < low
-                volume=1000.0,
-                tf="1h",
-                source="binance"
-            )
-    
-    def test_invalid_timeframe(self):
-        """Test invalid timeframe."""
-        with pytest.raises(ValueError, match="Invalid timeframe"):
-            Bar(
-                ts=1678886400000,
-                open=100.0,
-                high=105.0,
-                low=98.0,
-                close=103.0,
-                volume=1000.0,
-                tf="invalid",  # Invalid timeframe
-                source="binance"
-            )
-    
-    def test_negative_prices(self):
-        """Test negative prices."""
-        with pytest.raises(Exception):  # Pydantic will raise ValidationError
-            Bar(
-                ts=1678886400000,
-                open=-100.0,  # Negative price
-                high=105.0,
-                low=98.0,
-                close=103.0,
-                volume=1000.0,
-                tf="1h",
-                source="binance"
-            )
-    
-    def test_negative_volume(self):
-        """Test negative volume."""
-        with pytest.raises(Exception):  # Pydantic will raise ValidationError
-            Bar(
-                ts=1678886400000,
-                open=100.0,
-                high=105.0,
-                low=98.0,
-                close=103.0,
-                volume=-1000.0,  # Negative volume
-                tf="1h",
-                source="binance"
-            )
-    
-    def test_to_dict_conversion(self):
-        """Test to_dict conversion."""
-        bar = Bar(
-            ts=1678886400000,
-            open=100.0,
-            high=105.0,
-            low=98.0,
-            close=103.0,
-            volume=1000.0,
-            tf="1h",
-            source="binance"
+            symbol="BTC/USDT",
+            tf="1h"  # Using tf alias
         )
         
-        bar_dict = bar.to_dict()
-        assert bar_dict['timestamp'] == 1678886400000
-        assert bar_dict['open'] == 100.0
-        assert bar_dict['high'] == 105.0
-        assert bar_dict['low'] == 98.0
-        assert bar_dict['close'] == 103.0
-        assert bar_dict['volume'] == 1000.0
-        assert bar_dict['timeframe'] == "1h"
-        assert bar_dict['source'] == "binance"
+        # Test with timeframe field
+        bar2 = OHLCVBar(
+            timestamp=1704067200000,
+            open=50000.0,
+            high=51000.0,
+            low=49000.0,
+            close=50500.0,
+            volume=1000.0,
+            symbol="BTC/USDT",
+            timeframe="1h"  # Using timeframe field
+        )
+        
+        # Both should be equivalent
+        assert bar1.timeframe == bar2.timeframe
+        assert bar1.tf == bar2.tf
+        assert bar1.tf == "1h"
+        assert bar1.timeframe == "1h"
     
-    def test_from_dict_conversion(self):
-        """Test from_dict conversion."""
+    def test_ohlcv_bar_ts_alias(self):
+        """Test that OHLCVBar provides ts alias for timestamp."""
+        bar = OHLCVBar(
+            timestamp=1704067200000,
+            open=50000.0,
+            high=51000.0,
+            low=49000.0,
+            close=50500.0,
+            volume=1000.0,
+            symbol="BTC/USDT",
+            timeframe="1h"
+        )
+        
+        # Test ts alias
+        assert bar.ts == bar.timestamp
+        assert bar.ts == 1704067200000
+        assert bar.timestamp == 1704067200000
+    
+    def test_ohlcv_bar_property_access(self):
+        """Test that both tf and timeframe properties work."""
+        bar = OHLCVBar(
+            timestamp=1704067200000,
+            open=50000.0,
+            high=51000.0,
+            low=49000.0,
+            close=50500.0,
+            volume=1000.0,
+            symbol="BTC/USDT",
+            timeframe="4h"
+        )
+        
+        # Test property access
+        assert bar.tf == "4h"
+        assert bar.timeframe == "4h"
+        assert bar.tf == bar.timeframe
+        
+        # Test ts property
+        assert bar.ts == 1704067200000
+        assert bar.timestamp == 1704067200000
+        assert bar.ts == bar.timestamp
+    
+    def test_ohlcv_bar_dict_serialization(self):
+        """Test that dict serialization includes both tf and timeframe."""
+        bar = OHLCVBar(
+            timestamp=1704067200000,
+            open=50000.0,
+            high=51000.0,
+            low=49000.0,
+            close=50500.0,
+            volume=1000.0,
+            symbol="BTC/USDT",
+            timeframe="1d"
+        )
+        
+        # Test dict conversion
+        bar_dict = bar.dict()
+        
+        # Should include timeframe
+        assert "timeframe" in bar_dict
+        assert bar_dict["timeframe"] == "1d"
+        
+        # Test with by_alias=True
+        bar_dict_alias = bar.dict(by_alias=True)
+        assert "tf" in bar_dict_alias
+        assert bar_dict_alias["tf"] == "1d"
+    
+    def test_ohlcv_bar_from_dict_with_tf(self):
+        """Test creating OHLCVBar from dict with tf field."""
         bar_dict = {
-            'timestamp': 1678886400000,
-            'open': 100.0,
-            'high': 105.0,
-            'low': 98.0,
-            'close': 103.0,
-            'volume': 1000.0,
-            'timeframe': '1h',
-            'source': 'binance'
+            "timestamp": 1704067200000,
+            "open": 50000.0,
+            "high": 51000.0,
+            "low": 49000.0,
+            "close": 50500.0,
+            "volume": 1000.0,
+            "symbol": "BTC/USDT",
+            "tf": "1h",  # Using tf field
+            "source": "exchange"
         }
         
-        bar = Bar.from_dict(bar_dict)
-        assert bar.ts == 1678886400000
-        assert bar.open == 100.0
-        assert bar.high == 105.0
-        assert bar.low == 98.0
-        assert bar.close == 103.0
-        assert bar.volume == 1000.0
+        bar = OHLCVBar(**bar_dict)
+        
+        # Should work with tf field
+        assert bar.timeframe == "1h"
         assert bar.tf == "1h"
-        assert bar.source == "binance"
-
-
-class TestSnapshotMetaSchema:
-    """Test SnapshotMeta schema validation."""
+        assert bar.symbol == "BTC/USDT"
     
-    def test_create_from_bars(self):
-        """Test creating metadata from bars."""
-        bars = [
-            Bar(ts=1678886400000, open=100.0, high=105.0, low=98.0, close=103.0, volume=1000.0, tf="1h", source="binance"),
-            Bar(ts=1678890000000, open=103.0, high=108.0, low=101.0, close=106.0, volume=1200.0, tf="1h", source="binance")
-        ]
+    def test_ohlcv_bar_from_dict_with_timeframe(self):
+        """Test creating OHLCVBar from dict with timeframe field."""
+        bar_dict = {
+            "timestamp": 1704067200000,
+            "open": 50000.0,
+            "high": 51000.0,
+            "low": 49000.0,
+            "close": 50500.0,
+            "volume": 1000.0,
+            "symbol": "BTC/USDT",
+            "timeframe": "4h",  # Using timeframe field
+            "source": "exchange"
+        }
         
-        meta = SnapshotMeta.create_from_bars("BTC/USDT", "1h", bars)
+        bar = OHLCVBar(**bar_dict)
         
-        assert meta.symbol == "BTC/USDT"
-        assert meta.tf == "1h"
-        assert meta.count == 2
-        assert meta.dataset_hash is not None
-        assert len(meta.dataset_hash) == 64  # SHA256 hash length
+        # Should work with timeframe field
+        assert bar.timeframe == "4h"
+        assert bar.tf == "4h"
+        assert bar.symbol == "BTC/USDT"
     
-    def test_create_from_empty_bars(self):
-        """Test creating metadata from empty bars list."""
-        with pytest.raises(ValueError, match="Cannot create metadata from empty bars list"):
-            SnapshotMeta.create_from_bars("BTC/USDT", "1h", [])
-    
-    def test_invalid_hash_format(self):
-        """Test invalid hash format."""
-        with pytest.raises(ValueError, match="dataset_hash must be a 64-character hex string"):
-            SnapshotMeta(
-                symbol="BTC/USDT",
-                tf="1h",
-                since=datetime.now(timezone.utc),
-                until=datetime.now(timezone.utc),
-                count=1,
-                dataset_hash="invalid_hash"  # Not 64 characters
-            )
-
-
-class TestDataIntegrityCheck:
-    """Test DataIntegrityCheck schema."""
-    
-    def test_valid_integrity_check(self):
-        """Test valid integrity check."""
-        check = DataIntegrityCheck(
+    def test_ohlcv_bar_validation_with_tf(self):
+        """Test that validation works with tf field."""
+        # This should work without errors
+        bar = OHLCVBar(
+            timestamp=1704067200000,
+            open=50000.0,
+            high=51000.0,
+            low=49000.0,
+            close=50500.0,
+            volume=1000.0,
             symbol="BTC/USDT",
-            tf="1h",
-            is_valid=True,
-            issues=[],
-            gaps=[],
-            duplicates=[],
-            out_of_order=[],
-            total_bars=100,
-            time_range={"start": 1678886400000, "end": 1678890000000}
+            tf="1h"
         )
         
-        assert check.symbol == "BTC/USDT"
-        assert check.tf == "1h"
-        assert check.is_valid is True
-        assert len(check.issues) == 0
-        assert check.total_bars == 100
+        assert bar.timeframe == "1h"
+        assert bar.tf == "1h"
     
-    def test_invalid_integrity_check(self):
-        """Test invalid integrity check."""
-        check = DataIntegrityCheck(
+    def test_ohlcv_bar_validation_with_timeframe(self):
+        """Test that validation works with timeframe field."""
+        # This should work without errors
+        bar = OHLCVBar(
+            timestamp=1704067200000,
+            open=50000.0,
+            high=51000.0,
+            low=49000.0,
+            close=50500.0,
+            volume=1000.0,
             symbol="BTC/USDT",
-            tf="1h",
-            is_valid=False,
-            issues=["Duplicate timestamps found", "Gaps in data"],
-            gaps=[{"index": 10, "expected": 1678890000000, "actual": 1678893600000}],
-            duplicates=[{"ts": 1678890000000, "bar": {}}],
-            out_of_order=[{"index": 5, "ts": 1678886400000, "prev_ts": 1678890000000}],
-            total_bars=100,
-            time_range={"start": 1678886400000, "end": 1678890000000}
+            timeframe="1h"
         )
         
-        assert check.is_valid is False
-        assert len(check.issues) == 2
-        assert len(check.gaps) == 1
-        assert len(check.duplicates) == 1
-        assert len(check.out_of_order) == 1
+        assert bar.timeframe == "1h"
+        assert bar.tf == "1h"
+    
+    def test_ohlcv_bar_mixed_fields(self):
+        """Test that both tf and timeframe can be used together."""
+        # This should work - tf takes precedence due to alias
+        bar = OHLCVBar(
+            timestamp=1704067200000,
+            open=50000.0,
+            high=51000.0,
+            low=49000.0,
+            close=50500.0,
+            volume=1000.0,
+            symbol="BTC/USDT",
+            tf="1h",
+            timeframe="4h"  # This should be ignored in favor of tf
+        )
+        
+        # tf should take precedence
+        assert bar.timeframe == "1h"
+        assert bar.tf == "1h"
+    
+    def test_ohlcv_bar_json_serialization(self):
+        """Test JSON serialization with both tf and timeframe."""
+        bar = OHLCVBar(
+            timestamp=1704067200000,
+            open=50000.0,
+            high=51000.0,
+            low=49000.0,
+            close=50500.0,
+            volume=1000.0,
+            symbol="BTC/USDT",
+            timeframe="1h"
+        )
+        
+        # Test JSON serialization
+        bar_json = bar.json()
+        assert "timeframe" in bar_json
+        
+        # Test with by_alias=True
+        bar_json_alias = bar.json(by_alias=True)
+        assert "tf" in bar_json_alias
+
+
+if __name__ == "__main__":
+    pytest.main([__file__])

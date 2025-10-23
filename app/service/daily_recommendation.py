@@ -692,9 +692,8 @@ class DailyRecommendationService:
             Dictionary with refresh results
         """
         try:
-            from app.data.fetch import DataFetcher
-            
             # Initialize fetcher
+            from app.data.fetch import DataFetcher
             fetcher = DataFetcher()
             
             # Calculate buffer time (1 hour buffer)
@@ -703,8 +702,13 @@ class DailyRecommendationService:
             
             logger.info(f"Refreshing {symbol} {timeframe} from {since_with_buffer} (buffer: {buffer_ms}ms)")
             
+            # Convert timestamp to datetime for sync
+            since_datetime = datetime.fromtimestamp(since_with_buffer / 1000, tz=timezone.utc)
+            
             # Sync the timeframe
-            sync_result = fetcher.sync_symbol_timeframe(symbol, timeframe, force_refresh=True)
+            sync_result = fetcher.sync_symbol_timeframe(
+                symbol, timeframe, force_refresh=True, since=since_datetime
+            )
             
             if sync_result["success"]:
                 bars_added = sync_result.get("bars_added", 0)

@@ -36,7 +36,7 @@ class TestDataRefresh:
             "message": "Successfully synced BTC/USDT 1h"
         }
         
-        with patch('app.service.daily_recommendation.DataFetcher') as mock_fetcher_class:
+        with patch('app.data.fetch.DataFetcher') as mock_fetcher_class:
             mock_fetcher = Mock()
             mock_fetcher.sync_symbol_timeframe.return_value = mock_sync_result
             mock_fetcher_class.return_value = mock_fetcher
@@ -53,10 +53,13 @@ class TestDataRefresh:
             assert result["symbol"] == self.symbol
             assert "Refreshed BTC/USDT 1h with 10 new bars" in result["message"]
             
-            # Verify fetcher was called with correct parameters
-            mock_fetcher.sync_symbol_timeframe.assert_called_once_with(
-                self.symbol, "1h", force_refresh=True
-            )
+            # Verify fetcher was called with correct parameters including since
+            mock_fetcher.sync_symbol_timeframe.assert_called_once()
+            call_args = mock_fetcher.sync_symbol_timeframe.call_args
+            assert call_args[0][0] == self.symbol  # symbol
+            assert call_args[0][1] == "1h"  # timeframe
+            assert call_args[1]["force_refresh"] is True
+            assert "since" in call_args[1]  # since parameter should be passed
     
     def test_refresh_timeframe_data_failure(self):
         """Test data refresh failure handling."""
@@ -67,7 +70,7 @@ class TestDataRefresh:
             "message": "Network error"
         }
         
-        with patch('app.service.daily_recommendation.DataFetcher') as mock_fetcher_class:
+        with patch('app.data.fetch.DataFetcher') as mock_fetcher_class:
             mock_fetcher = Mock()
             mock_fetcher.sync_symbol_timeframe.return_value = mock_sync_result
             mock_fetcher_class.return_value = mock_fetcher
@@ -85,7 +88,7 @@ class TestDataRefresh:
     
     def test_refresh_timeframe_data_exception(self):
         """Test data refresh exception handling."""
-        with patch('app.service.daily_recommendation.DataFetcher') as mock_fetcher_class:
+        with patch('app.data.fetch.DataFetcher') as mock_fetcher_class:
             mock_fetcher_class.side_effect = Exception("Fetcher initialization failed")
             
             # Test refresh
@@ -289,6 +292,117 @@ class TestDataRefresh:
         tf_status = freshness_result["timeframe_status"]["1h"]
         assert tf_status["status"] == "no_data"
         assert tf_status["is_fresh"] is False
+    
+    def test_refresh_with_ohlcv_bar_compatibility(self):
+        """Test that refresh works with OHLCVBar objects (tf/timeframe compatibility)."""
+        # Mock successful sync result with OHLCVBar objects
+        mock_bars = [
+            OHLCVBar(
+                timestamp=1704067200000,
+                open=50000.0,
+                high=51000.0,
+                low=49000.0,
+                close=50500.0,
+                volume=1000.0,
+                symbol="BTC/USDT",
+                timeframe="1h"
+            )
+        ]
+        
+        mock_sync_result = {
+            "success": True,
+            "bars_added": 1,
+            "message": "Successfully synced BTC/USDT 1h"
+        }
+        
+        with patch('app.data.fetch.DataFetcher') as mock_fetcher_class:
+            mock_fetcher = Mock()
+            mock_fetcher.sync_symbol_timeframe.return_value = mock_sync_result
+            mock_fetcher_class.return_value = mock_fetcher
+            
+            # Test refresh
+            result = self.service._refresh_timeframe_data(
+                self.symbol, "1h", 1704067200000
+            )
+            
+            # Verify result
+            assert result["success"] is True
+            assert result["bars_added"] == 1
+            assert result["timeframe"] == "1h"
+            assert result["symbol"] == self.symbol
+            
+            # Verify fetcher was called with since parameter
+            mock_fetcher.sync_symbol_timeframe.assert_called_once()
+            call_args = mock_fetcher.sync_symbol_timeframe.call_args
+            assert call_args[0][0] == self.symbol
+            assert call_args[0][1] == "1h"
+            assert call_args[1]["force_refresh"] is True
+            assert "since" in call_args[1]
+    
+    def test_signal_based_recommendation_with_successful_refresh(self):
+        """Test that successful refresh leads to valid recommendation."""
+        # Mock stale data initially
+        stale_bars = [
+            OHLCVBar(
+                timestamp=1704067200000,  # Old timestamp
+                open=50000.0,
+                high=51000.0,
+                low=49000.0,
+                close=50500.0,
+                volume=1000.0,
+                symbol="BTC/USDT",
+                timeframe="1h"
+            )
+        ]
+        
+        # Mock fresh data after refresh
+        fresh_bars = [
+            OHLCVBar(
+                timestamp=1704067200000,
+                open=50000.0,
+                high=51000.0,
+                low=49000.0,
+                close=50500.0,
+                volume=1000.0,
+                symbol="BTC/USDT",
+                timeframe="1h"
+            ),
+            OHLCVBar(
+                timestamp=int((datetime.now(timezone.utc) - timedelta(minutes=30)).timestamp() * 1000),
+                open=50500.0,
+                high=51500.0,
+                low=50000.0,
+                close=51000.0,
+                volume=1200.0,
+                symbol="BTC/USDT",
+                timeframe="1h"
+            )
+        ]
+        
+        # Mock store responses
+        self.mock_store.read_bars.side_effect = [stale_bars, fresh_bars]
+        
+        # Mock successful refresh
+        mock_refresh_result = {
+            "success": True,
+            "bars_added": 5,
+            "message": "Successfully refreshed"
+        }
+        
+        with patch.object(self.service, '_refresh_timeframe_data', return_value=mock_refresh_result):
+            with patch.object(self.service, '_get_current_price', return_value=51000.0):
+                # Generate recommendation
+                recommendation = self.service._get_signal_based_recommendation(
+                    self.symbol, self.date, self.timeframes
+                )
+                
+                # Verify recommendation was generated (not HOLD due to stale data)
+                assert recommendation is not None
+                assert recommendation.symbol == self.symbol
+                assert recommendation.date == self.date
+                # Should not be HOLD due to data freshness issues
+                assert "Data freshness issues" not in recommendation.rationale
+                assert "Data still stale after refresh attempt" not in recommendation.rationale
 
 
 class TestDataRefreshIntegration:
