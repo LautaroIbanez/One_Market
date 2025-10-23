@@ -246,40 +246,100 @@ class DailyRecommendationService:
             )
     
     def _get_timeframe_rankings(self, symbol: str, timeframe: str, date: str) -> List[Dict[str, Any]]:
-        """Get rankings for a specific timeframe."""
+        """Get rankings for a specific timeframe using real strategy ranking service."""
         try:
-            # This would typically call the strategy ranking service
-            # For now, we'll create mock data to demonstrate the structure
-            mock_rankings = [
-                {
-                    "strategy": "ma_crossover",
+            # Use the real strategy ranking service
+            rankings = self.strategy_ranking.get_rankings(
+                symbol=symbol,
+                timeframe=timeframe,
+                date=date
+            )
+            
+            if not rankings:
+                logger.warning(f"No rankings available for {symbol} {timeframe} on {date}")
+                return []
+            
+            # Convert StrategyRecommendation objects to dictionaries
+            ranking_data = []
+            for ranking in rankings:
+                ranking_data.append({
+                    "strategy": ranking.strategy_name,
                     "timeframe": timeframe,
-                    "score": 0.75,
-                    "direction": 1,
+                    "score": ranking.score,
+                    "direction": ranking.direction,
                     "metrics": {
-                        "sharpe_ratio": 1.2,
-                        "win_rate": 0.65,
-                        "max_drawdown": -0.08,
-                        "total_return": 0.15
+                        "sharpe_ratio": ranking.sharpe_ratio,
+                        "win_rate": ranking.win_rate,
+                        "max_drawdown": ranking.max_drawdown,
+                        "total_return": ranking.total_return,
+                        "profit_factor": ranking.profit_factor,
+                        "calmar_ratio": ranking.calmar_ratio
                     }
-                },
-                {
-                    "strategy": "rsi_regime_pullback",
-                    "timeframe": timeframe,
-                    "score": 0.68,
-                    "direction": -1,
-                    "metrics": {
-                        "sharpe_ratio": 0.95,
-                        "win_rate": 0.58,
-                        "max_drawdown": -0.12,
-                        "total_return": 0.08
-                    }
-                }
-            ]
-            return mock_rankings
+                })
+            
+            logger.info(f"Retrieved {len(ranking_data)} rankings for {symbol} {timeframe}")
+            return ranking_data
             
         except Exception as e:
             logger.error(f"Error getting timeframe rankings: {e}")
+            # Fallback to basic signal analysis if ranking service fails
+            return self._get_fallback_rankings(symbol, timeframe, date)
+    
+    def _get_fallback_rankings(self, symbol: str, timeframe: str, date: str) -> List[Dict[str, Any]]:
+        """Fallback ranking method using basic signal analysis."""
+        try:
+            from app.research.signals import generate_signal, get_strategy_list
+            
+            # Get available strategies
+            strategies = get_strategy_list()
+            fallback_rankings = []
+            
+            # Get data for analysis
+            bars = self.store.read_bars(symbol, timeframe)
+            if not bars or len(bars) < 50:
+                logger.warning(f"Insufficient data for fallback analysis: {symbol} {timeframe}")
+                return []
+            
+            # Convert to DataFrame
+            df = pd.DataFrame([bar.to_dict() for bar in bars])
+            df = df.sort_values('timestamp').reset_index(drop=True)
+            
+            # Analyze each strategy
+            for strategy in strategies[:3]:  # Limit to top 3 strategies for performance
+                try:
+                    signal_output = generate_signal(strategy, df)
+                    
+                    # Calculate basic metrics
+                    current_signal = int(signal_output.signal.iloc[-1])
+                    signal_strength = float(signal_output.strength.iloc[-1]) if signal_output.strength is not None else 0.0
+                    
+                    # Simple score based on signal strength and consistency
+                    score = min(signal_strength, 1.0) if signal_strength > 0 else 0.0
+                    
+                    fallback_rankings.append({
+                        "strategy": strategy,
+                        "timeframe": timeframe,
+                        "score": score,
+                        "direction": current_signal,
+                        "metrics": {
+                            "sharpe_ratio": 0.0,  # Would need backtest for real value
+                            "win_rate": 0.5,
+                            "max_drawdown": -0.1,
+                            "total_return": 0.0,
+                            "profit_factor": 1.0,
+                            "calmar_ratio": 0.0
+                        }
+                    })
+                    
+                except Exception as e:
+                    logger.warning(f"Error analyzing strategy {strategy}: {e}")
+                    continue
+            
+            logger.info(f"Generated {len(fallback_rankings)} fallback rankings for {symbol} {timeframe}")
+            return fallback_rankings
+            
+        except Exception as e:
+            logger.error(f"Error in fallback rankings: {e}")
             return []
     
     def _determine_direction_from_weights(self, direction_weights: Dict[str, float]) -> int:
@@ -329,26 +389,44 @@ class DailyRecommendationService:
         # Get current price for calculations
         current_price = self._get_current_price(symbol)
         
+        # Calculate volatility-based levels
+        volatility_levels = self._calculate_volatility_based_levels(
+            symbol, best_strategy_weight.timeframe, current_price, direction
+        )
+        
+        # Update rationale with volatility information
+        enhanced_rationale = f"{rationale}. {volatility_levels['rationale']}"
+        
         return Recommendation(
             date=date,
             symbol=symbol,
             timeframe=best_strategy_weight.timeframe,
             direction=plan_direction,
             entry_price=current_price,
-            entry_band=[current_price * 0.995, current_price * 1.005] if current_price else None,
-            stop_loss=current_price * 0.95 if direction > 0 and current_price else None,
-            take_profit=current_price * 1.10 if direction > 0 and current_price else None,
+            entry_band=volatility_levels["entry_band"],
+            stop_loss=volatility_levels["stop_loss"],
+            take_profit=volatility_levels["take_profit"],
             quantity=self.capital * 0.1 / current_price if current_price else None,
             risk_amount=self.capital * self.max_risk_pct / 100,
             risk_percentage=self.max_risk_pct,
             confidence=int(weights.confidence * 100),
-            rationale=rationale,
+            rationale=enhanced_rationale,
             strategy_name=best_strategy_weight.strategy_name,
             strategy_score=best_strategy_weight.score,
             sharpe_ratio=best_strategy_weight.metrics.get("sharpe_ratio", 0.0),
             win_rate=best_strategy_weight.metrics.get("win_rate", 0.0),
             max_drawdown=best_strategy_weight.metrics.get("max_drawdown", 0.0),
-            mtf_analysis=mtf_analysis,
+            mtf_analysis={
+                **mtf_analysis,
+                "volatility_analysis": {
+                    "atr": volatility_levels["atr"],
+                    "volatility_multiplier": volatility_levels["volatility_multiplier"],
+                    "entry_band_pct": volatility_levels["entry_band_pct"],
+                    "sl_multiplier": volatility_levels["sl_multiplier"],
+                    "tp_multiplier": volatility_levels["tp_multiplier"],
+                    "risk_reward_ratio": volatility_levels["risk_reward_ratio"]
+                }
+            },
             ranking_weights=weights.direction_weights,
             dataset_hash=self._compute_dataset_hash(symbol, date, [best_strategy_weight.timeframe]),
             params_hash=self._compute_params_hash()
@@ -380,6 +458,228 @@ class DailyRecommendationService:
             
         return None
     
+    def _calculate_volatility_based_levels(self, symbol: str, timeframe: str, current_price: float, direction: int) -> Dict[str, Any]:
+        """Calculate entry band, stop loss, and take profit based on volatility (ATR)."""
+        try:
+            import numpy as np
+            
+            # Get recent data for volatility calculation
+            bars = self.store.read_bars(symbol, timeframe)
+            if not bars or len(bars) < 20:
+                logger.warning(f"Insufficient data for volatility calculation: {symbol} {timeframe}")
+                return self._get_default_levels(current_price, direction)
+            
+            # Convert to DataFrame
+            df = pd.DataFrame([bar.to_dict() for bar in bars])
+            df = df.sort_values('timestamp').reset_index(drop=True)
+            
+            # Calculate ATR (Average True Range) for volatility
+            high = df['high'].values
+            low = df['low'].values
+            close = df['close'].values
+            
+            # True Range calculation
+            tr1 = high[1:] - low[1:]
+            tr2 = np.abs(high[1:] - close[:-1])
+            tr3 = np.abs(low[1:] - close[:-1])
+            
+            true_range = np.maximum(tr1, np.maximum(tr2, tr3))
+            
+            # ATR calculation (14-period average)
+            atr_period = min(14, len(true_range))
+            atr = np.mean(true_range[-atr_period:]) if atr_period > 0 else 0
+            
+            # Calculate volatility-based multipliers
+            # More volatile assets get wider bands
+            volatility_multiplier = min(3.0, max(1.0, atr / current_price * 100))  # Scale based on ATR as % of price
+            
+            # Entry band (based on ATR)
+            entry_band_pct = 0.5 * volatility_multiplier  # 0.5% to 1.5% based on volatility
+            entry_band_low = current_price * (1 - entry_band_pct / 100)
+            entry_band_high = current_price * (1 + entry_band_pct / 100)
+            
+            # Stop loss (based on ATR)
+            if direction > 0:  # Long position
+                sl_multiplier = 2.0 * volatility_multiplier  # 2-6x ATR
+                stop_loss = current_price * (1 - (atr * sl_multiplier) / current_price)
+                tp_multiplier = 3.0 * volatility_multiplier  # 3-9x ATR
+                take_profit = current_price * (1 + (atr * tp_multiplier) / current_price)
+            elif direction < 0:  # Short position
+                sl_multiplier = 2.0 * volatility_multiplier
+                stop_loss = current_price * (1 + (atr * sl_multiplier) / current_price)
+                tp_multiplier = 3.0 * volatility_multiplier
+                take_profit = current_price * (1 - (atr * tp_multiplier) / current_price)
+            else:  # Hold
+                stop_loss = None
+                take_profit = None
+            
+            # Calculate risk-reward ratio
+            if stop_loss and take_profit:
+                risk = abs(current_price - stop_loss)
+                reward = abs(take_profit - current_price)
+                risk_reward_ratio = reward / risk if risk > 0 else 0
+            else:
+                risk_reward_ratio = 0
+            
+            return {
+                "entry_band": [entry_band_low, entry_band_high],
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "atr": atr,
+                "volatility_multiplier": volatility_multiplier,
+                "entry_band_pct": entry_band_pct,
+                "sl_multiplier": sl_multiplier if direction != 0 else 0,
+                "tp_multiplier": tp_multiplier if direction != 0 else 0,
+                "risk_reward_ratio": risk_reward_ratio,
+                "rationale": f"ATR-based levels: ATR={atr:.2f}, Vol={volatility_multiplier:.1f}x"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error calculating volatility-based levels: {e}")
+            return self._get_default_levels(current_price, direction)
+    
+    def _get_default_levels(self, current_price: float, direction: int) -> Dict[str, Any]:
+        """Get default levels when volatility calculation fails."""
+        if direction > 0:  # Long
+            return {
+                "entry_band": [current_price * 0.995, current_price * 1.005],
+                "stop_loss": current_price * 0.95,
+                "take_profit": current_price * 1.10,
+                "atr": 0,
+                "volatility_multiplier": 1.0,
+                "entry_band_pct": 0.5,
+                "sl_multiplier": 2.0,
+                "tp_multiplier": 3.0,
+                "risk_reward_ratio": 2.0,
+                "rationale": "Default levels (volatility calculation failed)"
+            }
+        elif direction < 0:  # Short
+            return {
+                "entry_band": [current_price * 0.995, current_price * 1.005],
+                "stop_loss": current_price * 1.05,
+                "take_profit": current_price * 0.90,
+                "atr": 0,
+                "volatility_multiplier": 1.0,
+                "entry_band_pct": 0.5,
+                "sl_multiplier": 2.0,
+                "tp_multiplier": 3.0,
+                "risk_reward_ratio": 2.0,
+                "rationale": "Default levels (volatility calculation failed)"
+            }
+        else:  # Hold
+            return {
+                "entry_band": None,
+                "stop_loss": None,
+                "take_profit": None,
+                "atr": 0,
+                "volatility_multiplier": 1.0,
+                "entry_band_pct": 0.5,
+                "sl_multiplier": 0,
+                "tp_multiplier": 0,
+                "risk_reward_ratio": 0,
+                "rationale": "Hold position - no levels"
+            }
+    
+    def _validate_data_freshness(self, symbol: str, date: str, timeframes: List[str]) -> Dict[str, Any]:
+        """Validate data freshness for given symbol and timeframes.
+        
+        Args:
+            symbol: Trading symbol
+            date: Date to validate (YYYY-MM-DD)
+            timeframes: List of timeframes to check
+            
+        Returns:
+            Dictionary with freshness validation results
+        """
+        try:
+            from datetime import datetime, timezone, timedelta
+            
+            # Parse requested date
+            requested_date = datetime.fromisoformat(date).replace(tzinfo=timezone.utc)
+            current_time = datetime.now(timezone.utc)
+            
+            freshness_results = {
+                "is_fresh": True,
+                "warnings": [],
+                "timeframe_status": {},
+                "overall_status": "fresh"
+            }
+            
+            for tf in timeframes:
+                try:
+                    bars = self.store.read_bars(symbol, tf)
+                    if not bars:
+                        freshness_results["timeframe_status"][tf] = {
+                            "status": "no_data",
+                            "message": f"No data available for {symbol} {tf}",
+                            "is_fresh": False
+                        }
+                        freshness_results["is_fresh"] = False
+                        continue
+                    
+                    # Get latest bar timestamp
+                    latest_bar = bars[-1]
+                    latest_timestamp = latest_bar.timestamp
+                    latest_datetime = datetime.fromtimestamp(latest_timestamp / 1000, tz=timezone.utc)
+                    
+                    # Calculate time difference
+                    time_diff = current_time - latest_datetime
+                    hours_old = time_diff.total_seconds() / 3600
+                    
+                    # Define freshness thresholds based on timeframe
+                    if tf == "1h":
+                        max_age_hours = 2  # 1h data should be less than 2 hours old
+                    elif tf == "4h":
+                        max_age_hours = 8  # 4h data should be less than 8 hours old
+                    elif tf == "1d":
+                        max_age_hours = 24  # 1d data should be less than 24 hours old
+                    else:
+                        max_age_hours = 4  # Default threshold
+                    
+                    is_fresh = hours_old <= max_age_hours
+                    
+                    freshness_results["timeframe_status"][tf] = {
+                        "status": "fresh" if is_fresh else "stale",
+                        "latest_timestamp": latest_timestamp,
+                        "latest_datetime": latest_datetime.isoformat(),
+                        "hours_old": round(hours_old, 2),
+                        "max_age_hours": max_age_hours,
+                        "is_fresh": is_fresh,
+                        "message": f"Data is {hours_old:.1f}h old (max: {max_age_hours}h)"
+                    }
+                    
+                    if not is_fresh:
+                        freshness_results["is_fresh"] = False
+                        freshness_results["warnings"].append(
+                            f"{symbol} {tf}: Data is {hours_old:.1f} hours old (max: {max_age_hours}h)"
+                        )
+                
+                except Exception as e:
+                    logger.error(f"Error validating freshness for {symbol} {tf}: {e}")
+                    freshness_results["timeframe_status"][tf] = {
+                        "status": "error",
+                        "message": f"Error checking freshness: {str(e)}",
+                        "is_fresh": False
+                    }
+                    freshness_results["is_fresh"] = False
+            
+            # Set overall status
+            if not freshness_results["is_fresh"]:
+                freshness_results["overall_status"] = "stale"
+                if len(freshness_results["warnings"]) > 0:
+                    freshness_results["overall_status"] = "stale_with_warnings"
+            
+            return freshness_results
+            
+        except Exception as e:
+            logger.error(f"Error validating data freshness: {e}")
+            return {
+                "is_fresh": False,
+                "warnings": [f"Error validating data freshness: {str(e)}"],
+                "timeframe_status": {},
+                "overall_status": "error"
+            }
+    
     def _get_signal_based_recommendation(
         self, 
         symbol: str, 
@@ -389,6 +689,16 @@ class DailyRecommendationService:
         """Generate recommendation based on multi-timeframe signals (legacy method)."""
         try:
             logger.info(f"Generating signal-based recommendation for {symbol} on {date}")
+            
+            # Validate data freshness first
+            freshness_check = self._validate_data_freshness(symbol, date, timeframes)
+            
+            if not freshness_check["is_fresh"]:
+                warning_messages = "; ".join(freshness_check["warnings"])
+                logger.warning(f"Data freshness issues for {symbol}: {warning_messages}")
+                return self._create_hold_recommendation(
+                    symbol, date, f"Data freshness issues: {warning_messages}"
+                )
             
             # Get current price
             current_price = self._get_current_price(symbol)
@@ -432,21 +742,85 @@ class DailyRecommendationService:
                 confidence = 60
                 rationale = "Fallback signal-based recommendation"
             
-            # Create recommendation
+            # Use dedicated engines for real calculations
+            direction_int = 1 if direction == PlanDirection.LONG else -1 if direction == PlanDirection.SHORT else 0
+            
+            # Get data for engines
+            bars = self.store.read_bars(symbol, "1h", since=datetime.now() - timedelta(days=7))
+            if not bars or len(bars) < 20:
+                logger.warning(f"Insufficient data for engine calculations: {symbol}")
+                return self._create_hold_recommendation(
+                    symbol, date, "Insufficient data for engine calculations"
+                )
+            
+            # Convert to DataFrame for engines
+            df = pd.DataFrame([bar.to_dict() for bar in bars])
+            df = df.sort_values('timestamp').reset_index(drop=True)
+            
+            # Use EntryBandEngine
+            from app.service.entry_band import calculate_entry_band
+            entry_result = calculate_entry_band(
+                df,
+                current_price,
+                signal_direction=direction_int,
+                beta=0.002,  # 0.2% adjustment
+                use_vwap=True
+            )
+            
+            # Use TpSlEngine
+            from app.service.tp_sl_engine import calculate_tp_sl, TPSLConfig
+            tp_sl_config = TPSLConfig(
+                method="hybrid",
+                atr_period=14,
+                atr_multiplier=2.0,
+                min_tp_pct=0.01,  # 1% minimum TP
+                max_tp_pct=0.10,  # 10% maximum TP
+                min_sl_pct=0.005,  # 0.5% minimum SL
+                max_sl_pct=0.05   # 5% maximum SL
+            )
+            
+            tp_sl_result = calculate_tp_sl(
+                df,
+                entry_result.entry_price,
+                direction_int,
+                tp_sl_config
+            )
+            
+            # Calculate position size
+            from app.core.risk import calculate_position_size_fixed_risk
+            position_size = calculate_position_size_fixed_risk(
+                capital=self.capital,
+                risk_pct=self.max_risk_pct / 100,
+                entry_price=entry_result.entry_price,
+                stop_loss=tp_sl_result.stop_loss
+            )
+            
+            # Calculate risk-reward ratio
+            if tp_sl_result.stop_loss and tp_sl_result.take_profit:
+                risk = abs(entry_result.entry_price - tp_sl_result.stop_loss)
+                reward = abs(tp_sl_result.take_profit - entry_result.entry_price)
+                risk_reward_ratio = reward / risk if risk > 0 else 0
+            else:
+                risk_reward_ratio = 0
+            
+            # Enhanced rationale with engine details
+            enhanced_rationale = f"{rationale}. Entry: {entry_result.method} method, TP/SL: {tp_sl_result.method_used}, R/R: {risk_reward_ratio:.2f}"
+            
+            # Create recommendation with real engine calculations
             recommendation = Recommendation(
                 date=date,
                 symbol=symbol,
                 timeframe="1h",
                 direction=direction,
-                entry_price=current_price,
-                entry_band=[current_price * 0.995, current_price * 1.005] if current_price else None,
-                stop_loss=current_price * 0.95 if direction == PlanDirection.LONG and current_price else None,
-                take_profit=current_price * 1.10 if direction == PlanDirection.LONG and current_price else None,
-                quantity=self.capital * 0.1 / current_price if current_price else None,
-                risk_amount=self.capital * self.max_risk_pct / 100,
+                entry_price=entry_result.entry_price,
+                entry_band=[entry_result.entry_low, entry_result.entry_high] if entry_result.entry_low and entry_result.entry_high else None,
+                stop_loss=tp_sl_result.stop_loss,
+                take_profit=tp_sl_result.take_profit,
+                quantity=position_size.quantity,
+                risk_amount=position_size.risk_amount,
                 risk_percentage=self.max_risk_pct,
                 confidence=confidence,
-                rationale=rationale,
+                rationale=enhanced_rationale,
                 strategy_name="signal_based",
                 strategy_score=confidence / 100.0,
                 sharpe_ratio=1.2,
@@ -454,7 +828,7 @@ class DailyRecommendationService:
                 max_drawdown=-0.08,
                 mtf_analysis={
                     "combined_score": confidence / 100.0,
-                    "direction": 1 if direction == PlanDirection.LONG else -1 if direction == PlanDirection.SHORT else 0,
+                    "direction": direction_int,
                     "confidence": confidence / 100.0,
                     "strategy_weights": [
                         {
@@ -468,6 +842,18 @@ class DailyRecommendationService:
                         "LONG": 1.0 if direction == PlanDirection.LONG else 0.0,
                         "SHORT": 1.0 if direction == PlanDirection.SHORT else 0.0,
                         "HOLD": 1.0 if direction == PlanDirection.HOLD else 0.0
+                    },
+                    "engine_analysis": {
+                        "entry_method": entry_result.method,
+                        "entry_mid": entry_result.entry_mid,
+                        "entry_beta": entry_result.beta,
+                        "entry_range_pct": entry_result.range_pct,
+                        "tp_sl_method": tp_sl_result.method_used,
+                        "atr_value": tp_sl_result.atr_value,
+                        "swing_level": tp_sl_result.swing_level,
+                        "risk_reward_ratio": risk_reward_ratio,
+                        "position_size": position_size.quantity,
+                        "risk_amount": position_size.risk_amount
                     }
                 },
                 ranking_weights={

@@ -145,7 +145,9 @@ class BackendClient:
         symbol: str,
         date: Optional[str] = None,
         capital: float = 10000.0,
-        risk_percentage: float = 2.0
+        risk_percentage: float = 2.0,
+        include_freshness: bool = True,
+        use_strategy_ranking: bool = False
     ) -> Optional[Dict[str, Any]]:
         """Get daily recommendation.
         
@@ -154,6 +156,8 @@ class BackendClient:
             date: Date in YYYY-MM-DD format (default: today)
             capital: Available capital
             risk_percentage: Risk percentage per trade
+            include_freshness: Include data freshness validation
+            use_strategy_ranking: Use strategy ranking instead of signal-based
             
         Returns:
             Recommendation data or None if failed
@@ -162,7 +166,9 @@ class BackendClient:
             params = {
                 "symbol": symbol,
                 "capital": capital,
-                "risk_percentage": risk_percentage
+                "risk_percentage": risk_percentage,
+                "include_freshness": include_freshness,
+                "use_strategy_ranking": use_strategy_ranking
             }
             
             if date:

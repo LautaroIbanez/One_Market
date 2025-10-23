@@ -28,12 +28,14 @@ def get_recommendation_service() -> DailyRecommendationService:
     return recommendation_service
 
 
-@router.get("/daily", response_model=Recommendation)
+@router.get("/daily")
 async def get_daily_recommendation(
     symbol: str = Query(..., description="Trading symbol"),
     date: Optional[str] = Query(None, description="Date in YYYY-MM-DD format (default: today)"),
     capital: float = Query(10000.0, description="Available capital"),
-    risk_percentage: float = Query(2.0, description="Risk percentage per trade")
+    risk_percentage: float = Query(2.0, description="Risk percentage per trade"),
+    include_freshness: bool = Query(True, description="Include data freshness validation"),
+    use_strategy_ranking: bool = Query(False, description="Use strategy ranking instead of signal-based")
 ):
     """Get daily recommendation for symbol/date.
     
@@ -42,9 +44,10 @@ async def get_daily_recommendation(
         date: Date for recommendation (default: today)
         capital: Available capital
         risk_percentage: Risk percentage per trade
+        include_freshness: Include data freshness validation in response
         
     Returns:
-        Recommendation object or HOLD with reason
+        Recommendation object with optional freshness validation
     """
     try:
         # Use today's date if not specified
@@ -64,11 +67,32 @@ async def get_daily_recommendation(
         # Get service with custom parameters
         service = DailyRecommendationService(capital=capital, max_risk_pct=risk_percentage)
         
-        # Generate recommendation directly using signal-based logic
-        recommendation = service._get_signal_based_recommendation(symbol, date, ["1h", "4h", "1d"])
+        # Generate recommendation using the main method with real engines
+        recommendation = service.get_daily_recommendation(
+            symbol=symbol,
+            date=date,
+            timeframes=["1h", "4h", "1d"],
+            use_strategy_ranking=use_strategy_ranking
+        )
+        
+        # Add freshness validation if requested
+        response_data = {
+            "recommendation": recommendation.model_dump(),
+            "metadata": {
+                "generated_at": datetime.now().isoformat(),
+                "symbol": symbol,
+                "date": date,
+                "capital": capital,
+                "risk_percentage": risk_percentage
+            }
+        }
+        
+        if include_freshness:
+            freshness_check = service._validate_data_freshness(symbol, date, ["1h", "4h", "1d"])
+            response_data["data_freshness"] = freshness_check
         
         logger.info(f"Generated recommendation for {symbol} on {date}: {recommendation.direction}")
-        return recommendation
+        return response_data
         
     except HTTPException:
         raise

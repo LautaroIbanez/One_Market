@@ -731,8 +731,8 @@ if df is not None and len(df) > 0:
                         st.info("💾 **Plan guardado!** Disponible en historial.")
             
             else:
-                # No trade today - Show hypothetical plan
-                st.subheader("🔮 Escenario Alternativo (Hipotético)")
+                # No trade today - Show recommendation with real engine calculations
+                st.subheader("🔮 Plan de Trading (Basado en Motores Reales)")
                 
                 if decision and decision.skip_reason:
                     # Show skip reason with explanation
@@ -744,56 +744,143 @@ if df is not None and len(df) > 0:
                 else:
                     st.info("⏸️ **No hay trade hoy.** Esperando mejores condiciones.")
                 
-                # Calculate and show hypothetical plan
-                signal_value = int(combined.signal.iloc[-1])
-                
-                if signal_value != 0 and decision:
-                    from app.service.decision import DecisionEngine
+                # Get recommendation from backend with real engines
+                try:
+                    recommendation = client.get_daily_recommendation(symbol, include_freshness=True)
                     
-                    st.markdown("---")
-                    st.markdown("### 📋 Plan que se ejecutaría (si condiciones fueran favorables)")
-                    
-                    try:
-                        engine = DecisionEngine()
-                        hypo_plan = engine.calculate_hypothetical_plan(
-                            df=df,
-                            signal=signal_value,
-                            signal_strength=float(combined.confidence.iloc[-1]),
-                            capital=capital,
-                            risk_pct=risk_pct
-                        )
+                    if recommendation and recommendation.get('recommendation'):
+                        rec = recommendation['recommendation']
                         
-                        if hypo_plan.get('has_plan'):
+                        # Show recommendation details even if it's HOLD
+                        if rec.get('direction') != 'HOLD':
+                            st.markdown("---")
+                            st.markdown("### 📋 Plan de Trading Calculado por Motores Reales")
+                            
                             col1, col2 = st.columns(2)
                             
                             with col1:
-                                st.markdown("**📍 Entrada Hipotética**")
-                                st.metric("Precio de Entrada", f"${hypo_plan['entry_price']:,.2f}", 
-                                         delta=f"{hypo_plan['distance_to_entry_pct']:.2f}% del precio actual")
-                                st.metric("Dirección", hypo_plan['side'])
-                                st.metric("Confianza", f"{hypo_plan['signal_strength']:.1%}")
+                                st.markdown("**📍 Entrada**")
+                                if rec.get('entry_price'):
+                                    st.metric("Precio de Entrada", f"${rec['entry_price']:,.2f}")
+                                
+                                if rec.get('entry_band'):
+                                    entry_low, entry_high = rec['entry_band']
+                                    st.metric("Rango de Entrada", f"${entry_low:,.2f} - ${entry_high:,.2f}")
+                                
+                                st.metric("Dirección", rec.get('direction', 'N/A'))
+                                st.metric("Confianza", f"{rec.get('confidence', 0)}%")
                             
                             with col2:
-                                st.markdown("**🛡️ Niveles de Riesgo**")
-                                st.metric("Stop Loss", f"${hypo_plan['stop_loss']:,.2f}")
-                                st.metric("Take Profit", f"${hypo_plan['take_profit']:,.2f}")
-                                st.metric("R/R Ratio", f"{hypo_plan['risk_reward_ratio']:.2f}")
+                                st.markdown("**🛡️ Gestión de Riesgo**")
+                                if rec.get('stop_loss'):
+                                    st.metric("Stop Loss", f"${rec['stop_loss']:,.2f}")
+                                if rec.get('take_profit'):
+                                    st.metric("Take Profit", f"${rec['take_profit']:,.2f}")
+                                
+                                # Calculate R/R ratio
+                                if rec.get('stop_loss') and rec.get('take_profit') and rec.get('entry_price'):
+                                    risk = abs(rec['entry_price'] - rec['stop_loss'])
+                                    reward = abs(rec['take_profit'] - rec['entry_price'])
+                                    rr = reward / risk if risk > 0 else 0
+                                    st.metric("R/R Ratio", f"{rr:.2f}")
                             
-                            st.markdown("**💼 Posición Propuesta**")
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("Cantidad", f"{hypo_plan['position_size']['quantity']:.4f}")
-                            with col2:
-                                st.metric("Valor", f"${hypo_plan['position_size']['notional']:,.2f}")
-                            with col3:
-                                st.metric("Riesgo", f"${hypo_plan['position_size']['risk_amount']:,.2f}")
+                            # Position details
+                            if rec.get('quantity'):
+                                st.markdown("**💼 Posición**")
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("Cantidad", f"{rec['quantity']:.4f}")
+                                with col2:
+                                    if rec.get('entry_price'):
+                                        notional = rec['quantity'] * rec['entry_price']
+                                        st.metric("Valor Nocional", f"${notional:,.2f}")
+                                with col3:
+                                    if rec.get('risk_amount'):
+                                        st.metric("Riesgo", f"${rec['risk_amount']:,.2f}")
                             
-                            st.info("ℹ️ **Nota:** Este es un plan hipotético. No se ejecutará automáticamente. Puedes usarlo como referencia para trading manual.")
+                            # Engine analysis details
+                            if rec.get('mtf_analysis', {}).get('engine_analysis'):
+                                engine_analysis = rec['mtf_analysis']['engine_analysis']
+                                st.markdown("**🔧 Análisis de Motores**")
+                                col1, col2, col3 = st.columns(3)
+                                
+                                with col1:
+                                    st.metric("Método Entry", engine_analysis.get('entry_method', 'N/A'))
+                                    st.metric("Beta Entry", f"{engine_analysis.get('entry_beta', 0):.4f}")
+                                
+                                with col2:
+                                    st.metric("Método TP/SL", engine_analysis.get('tp_sl_method', 'N/A'))
+                                    st.metric("ATR Value", f"{engine_analysis.get('atr_value', 0):.2f}")
+                                
+                                with col3:
+                                    st.metric("R/R Engine", f"{engine_analysis.get('risk_reward_ratio', 0):.2f}")
+                                    st.metric("Range %", f"{engine_analysis.get('entry_range_pct', 0):.2%}")
+                            
+                            # Data freshness info
+                            if recommendation.get('data_freshness'):
+                                freshness = recommendation['data_freshness']
+                                if not freshness.get('is_fresh', True):
+                                    st.warning("⚠️ **Datos Obsoletos:** " + "; ".join(freshness.get('warnings', [])))
+                                else:
+                                    st.success("✅ **Datos Frescos:** Información actualizada")
+                            
+                            st.info("ℹ️ **Nota:** Este plan está calculado con motores reales (EntryBand + TpSl). Puedes usarlo como referencia para trading manual.")
                         else:
-                            st.warning(f"⚠️ No se pudo calcular plan hipotético: {hypo_plan.get('reason', 'Unknown')}")
+                            st.info("ℹ️ **Recomendación HOLD:** No hay señales de trading en este momento.")
                     
-                    except Exception as e:
-                        st.error(f"❌ Error calculando plan hipotético: {str(e)}")
+                except Exception as e:
+                    st.error(f"❌ Error obteniendo recomendación del backend: {str(e)}")
+                    
+                    # Fallback to old hypothetical plan calculation
+                    signal_value = int(combined.signal.iloc[-1])
+                    
+                    if signal_value != 0 and decision:
+                        from app.service.decision import DecisionEngine
+                        
+                        st.markdown("---")
+                        st.markdown("### 📋 Plan Hipotético (Fallback)")
+                        
+                        try:
+                            engine = DecisionEngine()
+                            hypo_plan = engine.calculate_hypothetical_plan(
+                                df=df,
+                                signal=signal_value,
+                                signal_strength=float(combined.confidence.iloc[-1]),
+                                capital=capital,
+                                risk_pct=risk_pct
+                            )
+                            
+                            if hypo_plan.get('has_plan'):
+                                col1, col2 = st.columns(2)
+                                
+                                with col1:
+                                    st.markdown("**📍 Entrada Hipotética**")
+                                    st.metric("Precio de Entrada", f"${hypo_plan['entry_price']:,.2f}", 
+                                             delta=f"{hypo_plan['distance_to_entry_pct']:.2f}% del precio actual")
+                                    st.metric("Dirección", hypo_plan['side'])
+                                    st.metric("Confianza", f"{hypo_plan['signal_strength']:.1%}")
+                                
+                                with col2:
+                                    st.markdown("**🛡️ Niveles de Riesgo**")
+                                    st.metric("Stop Loss", f"${hypo_plan['stop_loss']:,.2f}")
+                                    st.metric("Take Profit", f"${hypo_plan['take_profit']:,.2f}")
+                                    st.metric("R/R Ratio", f"{hypo_plan['risk_reward_ratio']:.2f}")
+                                
+                                st.markdown("**💼 Posición Propuesta**")
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("Cantidad", f"{hypo_plan['position_size']['quantity']:.4f}")
+                                with col2:
+                                    st.metric("Valor", f"${hypo_plan['position_size']['notional']:,.2f}")
+                                with col3:
+                                    st.metric("Riesgo", f"${hypo_plan['position_size']['risk_amount']:,.2f}")
+                                
+                                st.info("ℹ️ **Nota:** Este es un plan hipotético (fallback). No se ejecutará automáticamente.")
+                            else:
+                                st.warning(f"⚠️ No se pudo calcular plan hipotético: {hypo_plan.get('reason', 'Unknown')}")
+                        
+                        except Exception as e2:
+                            st.error(f"❌ Error calculando plan hipotético: {str(e2)}")
             
             st.markdown("---")
             
