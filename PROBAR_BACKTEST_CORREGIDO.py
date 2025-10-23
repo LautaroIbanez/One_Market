@@ -166,3 +166,5 @@ if __name__ == "__main__":
         if not backtest_success:
             print("  ❌ Problema con backtest - revisa parámetros")
 
+
+

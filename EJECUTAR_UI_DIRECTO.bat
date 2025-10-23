@@ -1,46 +1,26 @@
 @echo off
+title ONE MARKET - UI Directo
 chcp 65001 >nul
 cls
 echo.
 echo ╔════════════════════════════════════════════════════════════╗
-echo ║         📊 ONE MARKET - UI Directo                        ║
+echo ║         🚀 ONE MARKET - UI Directo                        ║
 echo ╚════════════════════════════════════════════════════════════╝
 echo.
 
-echo ⚠️  IMPORTANTE: La API debe estar corriendo en puerto 8000
-echo ℹ️  Si no está corriendo, ejecuta primero: EJECUTAR_API.bat
+echo 📁 Cambiando al directorio del proyecto...
+cd /d %~dp0
+echo ✅ Directorio: %CD%
+
+echo.
+echo 🔍 Verificando Python y Streamlit...
+python --version
+python -c "import streamlit; print('Streamlit OK')"
+
+echo.
+echo 🌐 Iniciando UI directamente...
+echo ℹ️  Si hay errores, los verás aquí
+echo ℹ️  La UI se abrirá en: http://localhost:8501
 echo.
 
-REM Verificar que existe el archivo
-if not exist "ui\app_enhanced.py" (
-    echo ❌ Error: No se encuentra ui\app_enhanced.py
-    pause
-    exit /b 1
-)
-
-echo ⏳ Iniciando UI con Python directo...
-echo ℹ️  Presiona Ctrl+C para detener
-echo.
-
-set PYTHONPATH=%CD%
-
-echo 🔧 Ejecutando: python -m streamlit run ui/app_enhanced.py
-echo.
-
-python -m streamlit run ui/app_enhanced.py
-
-if errorlevel 1 (
-    echo.
-    echo ❌ Error al iniciar la UI
-    echo.
-    echo 🆘 Soluciones:
-    echo    1. Ejecuta primero: EJECUTAR_API.bat
-    echo    2. Verifica que Python esté instalado
-    echo    3. Ejecuta: pip install streamlit
-    echo.
-    pause
-) else (
-    echo.
-    echo ℹ️  La UI se cerró normalmente
-    pause
-)
+streamlit run ui/app_simple_test.py --server.port 8501 --server.headless false

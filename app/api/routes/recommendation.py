@@ -64,8 +64,8 @@ async def get_daily_recommendation(
         # Get service with custom parameters
         service = DailyRecommendationService(capital=capital, max_risk_pct=risk_percentage)
         
-        # Generate recommendation
-        recommendation = service.get_daily_recommendation(symbol, date)
+        # Generate recommendation directly using signal-based logic
+        recommendation = service._get_signal_based_recommendation(symbol, date, ["1h", "4h", "1d"])
         
         logger.info(f"Generated recommendation for {symbol} on {date}: {recommendation.direction}")
         return recommendation

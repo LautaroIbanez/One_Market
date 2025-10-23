@@ -172,3 +172,5 @@ if __name__ == "__main__":
                 error = result.get('error', 'Unknown')
                 print(f"  ❌ {case['symbol']} {case['tf']}: {error}")
 
+
+

@@ -250,3 +250,5 @@ if __name__ == "__main__":
         if successful_friendly < total_friendly:
             print("  ❌ Problema con mapeo de nombres")
 
+
+

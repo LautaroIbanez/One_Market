@@ -230,3 +230,5 @@ if __name__ == "__main__":
         if successful_tests < total_tests:
             print("  ❌ Problema con backtest - revisa nombres de estrategias")
 
+
+

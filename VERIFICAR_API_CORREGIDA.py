@@ -109,3 +109,5 @@ if __name__ == "__main__":
         print("\n⚠️  Algunas verificaciones fallaron")
         print("ℹ️  Revisa los errores arriba para más detalles")
 
+
+
