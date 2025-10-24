@@ -84,3 +84,4 @@ echo 🎯 Si llegaste aquí, la UI debería haber funcionado
 echo.
 pause
 
+

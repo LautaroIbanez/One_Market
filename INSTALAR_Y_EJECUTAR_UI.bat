@@ -35,3 +35,4 @@ echo.
 
 python -m streamlit run ui/app_simple_test.py --server.port 8501 --server.headless false
 
+

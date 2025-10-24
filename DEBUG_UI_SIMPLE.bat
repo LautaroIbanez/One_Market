@@ -52,3 +52,4 @@ echo.
 echo 🎯 Si llegaste aquí, la UI debería haber funcionado
 pause
 
+

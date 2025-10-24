@@ -967,8 +967,9 @@ class DailyRecommendationService:
             # Use dedicated engines for real calculations
             direction_int = 1 if direction == PlanDirection.LONG else -1 if direction == PlanDirection.SHORT else 0
             
-            # Get data for engines
-            bars = self.store.read_bars(symbol, "1h", since=datetime.now() - timedelta(days=7))
+            # Get data for engines (use more days to ensure we have enough data)
+            since_datetime = datetime.now() - timedelta(days=30)
+            bars = self.store.read_bars(symbol, "1h", since=since_datetime)
             if not bars or len(bars) < 20:
                 logger.warning(f"Insufficient data for engine calculations: {symbol}")
                 return self._create_hold_recommendation(

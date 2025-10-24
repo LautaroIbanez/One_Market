@@ -39,3 +39,4 @@ echo 📊 UI: Ejecuta 'EJECUTAR_UI_COMPLETA.bat' para abrir la interfaz
 echo.
 pause
 
+

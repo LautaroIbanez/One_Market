@@ -37,3 +37,4 @@ echo 🎯 Si llegaste aquí, Streamlit funciona correctamente
 echo.
 pause
 
+
