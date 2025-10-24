@@ -83,19 +83,174 @@ def get_best_strategy_recommendation(symbol: str, capital: float):
 
 
 def create_simple_recommendation(symbol: str, capital: float):
-    """Create a simple recommendation when full system fails."""
-    from app.service.recommendation_contract import Recommendation, PlanDirection
-    
-    return Recommendation(
-        date=datetime.now().strftime('%Y-%m-%d'),
-        symbol=symbol,
-        timeframe="1h",
-        direction=PlanDirection.HOLD,
-        rationale="Sistema de recomendación en modo fallback - análisis completo no disponible",
-        confidence=30,
-        dataset_hash="fallback_hash",
-        params_hash="fallback_params"
-    )
+    """Create a recommendation using real quantitative analysis when full system fails."""
+    try:
+        from app.service.recommendation_contract import Recommendation, PlanDirection
+        from app.service.daily_recommendation import DailyRecommendationService
+        from app.research.backtest.engine import BacktestEngine
+        from app.research.signals import get_strategy_list, generate_signal
+        from app.data import DataStore
+        
+        # Try to get real quantitative analysis
+        store = DataStore()
+        bars = store.read_bars(symbol, "1h")
+        
+        if not bars or len(bars) < 50:
+            # Insufficient data - return HOLD
+            return Recommendation(
+                date=datetime.now().strftime('%Y-%m-%d'),
+                symbol=symbol,
+                timeframe="1h",
+                direction=PlanDirection.HOLD,
+                rationale="Datos insuficientes para análisis cuantitativo",
+                confidence=20,
+                dataset_hash="insufficient_data",
+                params_hash="fallback_params"
+            )
+        
+        # Convert to DataFrame
+        df = pd.DataFrame([bar.to_dict() for bar in bars])
+        df = df.sort_values('timestamp').reset_index(drop=True)
+        
+        # Get available strategies
+        strategies = get_strategy_list()
+        best_strategy = None
+        best_score = -1
+        best_metrics = {}
+        
+        # Initialize backtest engine
+        backtest_engine = BacktestEngine(
+            initial_capital=capital,
+            risk_per_trade=0.02
+        )
+        
+        # Analyze strategies with real backtesting
+        for strategy in strategies[:3]:  # Limit to top 3 for performance
+            try:
+                # Generate signal
+                signal_output = generate_signal(strategy, df)
+                current_signal = int(signal_output.signal.iloc[-1])
+                
+                if current_signal == 0:  # Skip neutral signals
+                    continue
+                
+                # Run real backtest
+                backtest_result = backtest_engine.run_backtest(
+                    df=df,
+                    signals=signal_output.signal,
+                    strategy_name=strategy,
+                    verbose=False
+                )
+                
+                # Calculate composite score
+                sharpe = backtest_result.sharpe_ratio
+                win_rate = backtest_result.win_rate
+                profit_factor = backtest_result.profit_factor
+                
+                # Weighted score
+                score = (sharpe * 0.4 + win_rate * 0.3 + profit_factor * 0.3)
+                
+                if score > best_score:
+                    best_score = score
+                    best_strategy = strategy
+                    best_metrics = {
+                        "sharpe_ratio": sharpe,
+                        "win_rate": win_rate,
+                        "max_drawdown": backtest_result.max_drawdown,
+                        "total_return": backtest_result.total_return,
+                        "profit_factor": profit_factor,
+                        "total_trades": backtest_result.total_trades
+                    }
+                    
+            except Exception as e:
+                st.warning(f"Error analyzing {strategy}: {e}")
+                continue
+        
+        if best_strategy and best_score > 0.1:  # Minimum threshold
+            # Generate signal for best strategy
+            signal_output = generate_signal(best_strategy, df)
+            current_signal = int(signal_output.signal.iloc[-1])
+            current_price = float(df['close'].iloc[-1])
+            
+            # Determine direction
+            if current_signal > 0:
+                direction = PlanDirection.LONG
+            elif current_signal < 0:
+                direction = PlanDirection.SHORT
+            else:
+                direction = PlanDirection.HOLD
+            
+            # Calculate position size
+            risk_amount = capital * 0.02  # 2% risk
+            quantity = risk_amount / current_price
+            
+            # Calculate SL/TP based on ATR
+            atr_period = 14
+            if len(df) >= atr_period:
+                high_low = df['high'] - df['low']
+                high_close = np.abs(df['high'] - df['close'].shift())
+                low_close = np.abs(df['low'] - df['close'].shift())
+                true_range = np.maximum(high_low, np.maximum(high_close, low_close))
+                atr = true_range.rolling(window=atr_period).mean().iloc[-1]
+            else:
+                atr = current_price * 0.02
+            
+            # Calculate levels
+            if direction == PlanDirection.LONG:
+                stop_loss = current_price - (atr * 2.0)
+                take_profit = current_price + (atr * 3.0)
+            elif direction == PlanDirection.SHORT:
+                stop_loss = current_price + (atr * 2.0)
+                take_profit = current_price - (atr * 3.0)
+            else:
+                stop_loss = None
+                take_profit = None
+            
+            return Recommendation(
+                date=datetime.now().strftime('%Y-%m-%d'),
+                symbol=symbol,
+                timeframe="1h",
+                direction=direction,
+                entry_price=current_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                quantity=quantity,
+                risk_amount=risk_amount,
+                rationale=f"Análisis cuantitativo real: {best_strategy} (Score: {best_score:.2f}, Sharpe: {best_metrics['sharpe_ratio']:.2f})",
+                confidence=min(int(best_score * 100), 95),
+                strategy_name=best_strategy,
+                sharpe_ratio=best_metrics['sharpe_ratio'],
+                win_rate=best_metrics['win_rate'],
+                max_drawdown=best_metrics['max_drawdown'],
+                dataset_hash="real_quantitative_analysis",
+                params_hash="real_backtest_params"
+            )
+        else:
+            # No good strategy found - return HOLD with real analysis info
+            return Recommendation(
+                date=datetime.now().strftime('%Y-%m-%d'),
+                symbol=symbol,
+                timeframe="1h",
+                direction=PlanDirection.HOLD,
+                rationale="Análisis cuantitativo completo realizado - ninguna estrategia supera el umbral mínimo de rendimiento",
+                confidence=40,
+                dataset_hash="real_analysis_no_signal",
+                params_hash="real_backtest_params"
+            )
+            
+    except Exception as e:
+        st.error(f"Error in quantitative fallback analysis: {e}")
+        # Final fallback to simple HOLD
+        return Recommendation(
+            date=datetime.now().strftime('%Y-%m-%d'),
+            symbol=symbol,
+            timeframe="1h",
+            direction=PlanDirection.HOLD,
+            rationale=f"Error en análisis cuantitativo: {str(e)}",
+            confidence=10,
+            dataset_hash="error_fallback",
+            params_hash="error_params"
+        )
 
 
 def create_fallback_recommendation(symbol: str, timeframe: str, capital: float):
@@ -775,7 +930,7 @@ def create_fallback_comparison(symbol: str, timeframe: str, capital: float):
                         position = 0
                         entry_price = 0
                 
-                # Calculate comprehensive metrics
+                # Calculate comprehensive metrics using real backtesting
                 if trades:
                     metrics = calculator.calculate_comprehensive_metrics(
                         trades=trades,
@@ -785,16 +940,45 @@ def create_fallback_comparison(symbol: str, timeframe: str, capital: float):
                         end_date=df.index[-1]
                     )
                 else:
-                    # No trades - use default metrics
-                    metrics = {
-                        'cagr': 0.0,
-                        'sharpe_ratio': 0.0,
-                        'win_rate': 0.5,
-                        'max_drawdown': -0.1,
-                        'profit_factor': 1.0,
-                        'expectancy': 0.0,
-                        'total_trades': 0
-                    }
+                    # No trades - run real backtest to get actual metrics
+                    try:
+                        from app.research.backtest.engine import BacktestEngine
+                        backtest_engine = BacktestEngine(
+                            initial_capital=capital,
+                            risk_per_trade=0.02
+                        )
+                        
+                        # Run real backtest
+                        backtest_result = backtest_engine.run_backtest(
+                            df=df,
+                            signals=signal_output.signal,
+                            strategy_name=name,
+                            verbose=False
+                        )
+                        
+                        # Use real quantitative metrics
+                        metrics = {
+                            'cagr': backtest_result.cagr,
+                            'sharpe_ratio': backtest_result.sharpe_ratio,
+                            'win_rate': backtest_result.win_rate,
+                            'max_drawdown': backtest_result.max_drawdown,
+                            'profit_factor': backtest_result.profit_factor,
+                            'expectancy': backtest_result.expectancy,
+                            'total_trades': backtest_result.total_trades
+                        }
+                        
+                    except Exception as backtest_error:
+                        st.warning(f"Backtest failed for {name}: {backtest_error}")
+                        # Use conservative default metrics
+                        metrics = {
+                            'cagr': 0.0,
+                            'sharpe_ratio': 0.0,
+                            'win_rate': 0.0,
+                            'max_drawdown': 0.0,
+                            'profit_factor': 0.0,
+                            'expectancy': 0.0,
+                            'total_trades': 0
+                        }
                 
                 comparison_data.append({
                     'Strategy': name,
@@ -948,7 +1132,7 @@ with tab1:
             st.metric("🎯 Take Profit", f"${recommendation.take_profit:.2f}" if recommendation.take_profit else "N/A")
         
         # Tipo de estrategia
-        if recommendation.is_combination:
+        if hasattr(recommendation, 'is_combination') and recommendation.is_combination:
             st.info("🔗 Esta es una combinación de estrategias")
         else:
             st.info("📊 Esta es una estrategia individual")

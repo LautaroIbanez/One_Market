@@ -388,8 +388,10 @@ def start_scheduler():
         print(f"   Scheduled jobs: {len(scheduler.get_jobs())}")
         for job in scheduler.get_jobs():
             print(f"   - {job.name} (next run: {job.next_run_time})")
+        print("🔄 Daily automation is now active")
     else:
         print("⚠️  Scheduler not started (disabled in settings)")
+        print("   Manual execution required for all operations")
 
 
 def stop_scheduler():

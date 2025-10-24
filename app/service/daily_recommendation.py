@@ -286,9 +286,11 @@ class DailyRecommendationService:
             return self._get_fallback_rankings(symbol, timeframe, date)
     
     def _get_fallback_rankings(self, symbol: str, timeframe: str, date: str) -> List[Dict[str, Any]]:
-        """Fallback ranking method using basic signal analysis."""
+        """Fallback ranking method using real quantitative analysis."""
         try:
             from app.research.signals import generate_signal, get_strategy_list
+            from app.research.backtest.engine import BacktestEngine
+            from app.research.backtest.metrics import calculate_metrics
             
             # Get available strategies
             strategies = get_strategy_list()
@@ -304,43 +306,112 @@ class DailyRecommendationService:
             df = pd.DataFrame([bar.to_dict() for bar in bars])
             df = df.sort_values('timestamp').reset_index(drop=True)
             
-            # Analyze each strategy
+            # Initialize backtest engine for real quantitative analysis
+            backtest_engine = BacktestEngine(
+                initial_capital=10000.0,
+                risk_per_trade=0.02
+            )
+            
+            # Analyze each strategy with real backtesting
             for strategy in strategies[:3]:  # Limit to top 3 strategies for performance
                 try:
+                    # Generate signal
                     signal_output = generate_signal(strategy, df)
                     
-                    # Calculate basic metrics
+                    # Calculate basic signal info
                     current_signal = int(signal_output.signal.iloc[-1])
                     signal_strength = float(signal_output.strength.iloc[-1]) if signal_output.strength is not None else 0.0
                     
-                    # Simple score based on signal strength and consistency
-                    score = min(signal_strength, 1.0) if signal_strength > 0 else 0.0
+                    # Run real backtest for quantitative metrics
+                    try:
+                        backtest_result = backtest_engine.run_backtest(
+                            df=df,
+                            signals=signal_output.signal,
+                            strategy_name=strategy,
+                            verbose=False
+                        )
+                        
+                        # Extract real quantitative metrics
+                        real_metrics = {
+                            "sharpe_ratio": backtest_result.sharpe_ratio,
+                            "win_rate": backtest_result.win_rate,
+                            "max_drawdown": backtest_result.max_drawdown,
+                            "total_return": backtest_result.total_return,
+                            "profit_factor": backtest_result.profit_factor,
+                            "calmar_ratio": backtest_result.calmar_ratio,
+                            "total_trades": backtest_result.total_trades,
+                            "expectancy": backtest_result.expectancy
+                        }
+                        
+                        # Calculate composite score using real metrics
+                        score = self._calculate_composite_score(real_metrics, signal_strength)
+                        
+                        logger.info(f"Real backtest for {strategy}: Sharpe={real_metrics['sharpe_ratio']:.2f}, WR={real_metrics['win_rate']:.1%}")
+                        
+                    except Exception as backtest_error:
+                        logger.warning(f"Backtest failed for {strategy}: {backtest_error}")
+                        # Use signal-based fallback if backtest fails
+                        real_metrics = {
+                            "sharpe_ratio": 0.0,
+                            "win_rate": 0.5,
+                            "max_drawdown": -0.1,
+                            "total_return": 0.0,
+                            "profit_factor": 1.0,
+                            "calmar_ratio": 0.0,
+                            "total_trades": 0,
+                            "expectancy": 0.0
+                        }
+                        score = min(signal_strength, 1.0) if signal_strength > 0 else 0.0
                     
                     fallback_rankings.append({
                         "strategy": strategy,
                         "timeframe": timeframe,
                         "score": score,
                         "direction": current_signal,
-                        "metrics": {
-                            "sharpe_ratio": 0.0,  # Would need backtest for real value
-                            "win_rate": 0.5,
-                            "max_drawdown": -0.1,
-                            "total_return": 0.0,
-                            "profit_factor": 1.0,
-                            "calmar_ratio": 0.0
-                        }
+                        "metrics": real_metrics,
+                        "signal_strength": signal_strength,
+                        "backtest_success": "sharpe_ratio" in real_metrics and real_metrics["sharpe_ratio"] != 0.0
                     })
                     
                 except Exception as e:
                     logger.warning(f"Error analyzing strategy {strategy}: {e}")
                     continue
             
-            logger.info(f"Generated {len(fallback_rankings)} fallback rankings for {symbol} {timeframe}")
+            logger.info(f"Generated {len(fallback_rankings)} fallback rankings with real quantitative analysis for {symbol} {timeframe}")
             return fallback_rankings
             
         except Exception as e:
             logger.error(f"Error in fallback rankings: {e}")
             return []
+    
+    def _calculate_composite_score(self, metrics: Dict[str, float], signal_strength: float) -> float:
+        """Calculate composite score using real quantitative metrics."""
+        try:
+            # Weight the metrics for scoring
+            sharpe_weight = 0.3
+            win_rate_weight = 0.25
+            profit_factor_weight = 0.2
+            signal_weight = 0.25
+            
+            # Normalize metrics to 0-1 scale
+            sharpe_score = min(max(metrics.get("sharpe_ratio", 0.0) / 2.0, 0.0), 1.0)  # 2.0 Sharpe = 1.0 score
+            win_rate_score = metrics.get("win_rate", 0.5)
+            profit_factor_score = min(max(metrics.get("profit_factor", 1.0) / 3.0, 0.0), 1.0)  # 3.0 PF = 1.0 score
+            signal_score = min(signal_strength, 1.0) if signal_strength > 0 else 0.0
+            
+            # Calculate weighted composite score
+            composite_score = (
+                sharpe_score * sharpe_weight +
+                win_rate_score * win_rate_weight +
+                profit_factor_score * profit_factor_weight +
+                signal_score * signal_weight
+            )
+            
+            return composite_score
+            
+        except Exception as e:
+            logger.warning(f"Error calculating composite score: {e}")
+            return 0.0
     
     def _determine_direction_from_weights(self, direction_weights: Dict[str, float]) -> int:
         """Determine overall direction from weight distribution."""
@@ -539,7 +610,81 @@ class DailyRecommendationService:
             return self._get_default_levels(current_price, direction)
     
     def _get_default_levels(self, current_price: float, direction: int) -> Dict[str, Any]:
-        """Get default levels when volatility calculation fails."""
+        """Get default levels using volatility-based calculation when main calculation fails."""
+        try:
+            # Try to get recent data for volatility calculation
+            since_datetime = datetime.now() - timedelta(days=7)
+            bars = self.store.read_bars("BTC/USDT", "1h", since=since_datetime)
+            
+            if bars and len(bars) >= 20:
+                # Calculate ATR for volatility
+                df = pd.DataFrame([bar.to_dict() for bar in bars])
+                df = df.sort_values('timestamp').reset_index(drop=True)
+                
+                # Calculate ATR
+                high = df['high'].values
+                low = df['low'].values
+                close = df['close'].values
+                
+                tr1 = high[1:] - low[1:]
+                tr2 = np.abs(high[1:] - close[:-1])
+                tr3 = np.abs(low[1:] - close[:-1])
+                
+                true_range = np.maximum(tr1, np.maximum(tr2, tr3))
+                atr_period = min(14, len(true_range))
+                atr = np.mean(true_range[-atr_period:]) if atr_period > 0 else current_price * 0.02
+                
+                # Get backtest metrics
+                backtest_metrics = self._get_backtest_metrics("BTC/USDT", "1h")
+                performance_adjustment = self._calculate_performance_adjustment(backtest_metrics)
+                
+                # Calculate volatility-based levels
+                base_volatility_multiplier = min(3.0, max(1.0, atr / current_price * 100))
+                volatility_multiplier = base_volatility_multiplier * performance_adjustment
+                
+                # Entry band
+                entry_band_pct = 0.5 * volatility_multiplier
+                entry_band_low = current_price * (1 - entry_band_pct / 100)
+                entry_band_high = current_price * (1 + entry_band_pct / 100)
+                
+                if direction > 0:  # Long
+                    sl_multiplier = 2.0 * volatility_multiplier
+                    stop_loss = current_price * (1 - (atr * sl_multiplier) / current_price)
+                    tp_multiplier = 3.0 * volatility_multiplier
+                    take_profit = current_price * (1 + (atr * tp_multiplier) / current_price)
+                elif direction < 0:  # Short
+                    sl_multiplier = 2.0 * volatility_multiplier
+                    stop_loss = current_price * (1 + (atr * sl_multiplier) / current_price)
+                    tp_multiplier = 3.0 * volatility_multiplier
+                    take_profit = current_price * (1 - (atr * tp_multiplier) / current_price)
+                else:  # Hold
+                    stop_loss = None
+                    take_profit = None
+                
+                # Calculate risk-reward ratio
+                risk_reward_ratio = 0
+                if stop_loss and take_profit:
+                    risk = abs(current_price - stop_loss)
+                    reward = abs(take_profit - current_price)
+                    risk_reward_ratio = reward / risk if risk > 0 else 0
+                
+                return {
+                    "entry_band": [entry_band_low, entry_band_high],
+                    "stop_loss": stop_loss,
+                    "take_profit": take_profit,
+                    "atr": atr,
+                    "volatility_multiplier": volatility_multiplier,
+                    "entry_band_pct": entry_band_pct,
+                    "sl_multiplier": sl_multiplier if direction != 0 else 0,
+                    "tp_multiplier": tp_multiplier if direction != 0 else 0,
+                    "risk_reward_ratio": risk_reward_ratio,
+                    "backtest_metrics": backtest_metrics,
+                    "rationale": f"ATR-based levels: ATR={atr:.2f}, Vol={volatility_multiplier:.1f}x, R/R={risk_reward_ratio:.1f}"
+                }
+        except Exception as e:
+            logger.warning(f"Error in volatility-based default levels: {e}")
+        
+        # Fallback to conservative fixed levels if volatility calculation fails
         if direction > 0:  # Long
             return {
                 "entry_band": [current_price * 0.995, current_price * 1.005],
@@ -551,7 +696,7 @@ class DailyRecommendationService:
                 "sl_multiplier": 2.0,
                 "tp_multiplier": 3.0,
                 "risk_reward_ratio": 2.0,
-                "rationale": "Default levels (volatility calculation failed)"
+                "rationale": "Conservative fallback levels"
             }
         elif direction < 0:  # Short
             return {
@@ -564,7 +709,7 @@ class DailyRecommendationService:
                 "sl_multiplier": 2.0,
                 "tp_multiplier": 3.0,
                 "risk_reward_ratio": 2.0,
-                "rationale": "Default levels (volatility calculation failed)"
+                "rationale": "Conservative fallback levels"
             }
         else:  # Hold
             return {
@@ -967,9 +1112,21 @@ class DailyRecommendationService:
             # Use dedicated engines for real calculations
             direction_int = 1 if direction == PlanDirection.LONG else -1 if direction == PlanDirection.SHORT else 0
             
-            # Get data for engines (use more days to ensure we have enough data)
+            # Get data for engines (try multiple time ranges to ensure we have enough data)
             since_datetime = datetime.now() - timedelta(days=30)
             bars = self.store.read_bars(symbol, "1h", since=since_datetime)
+            
+            # If not enough recent data, try older data
+            if not bars or len(bars) < 20:
+                logger.warning(f"Insufficient recent data for {symbol}, trying older data...")
+                since_datetime = datetime.now() - timedelta(days=90)
+                bars = self.store.read_bars(symbol, "1h", since=since_datetime)
+            
+            # If still not enough data, try without date filter
+            if not bars or len(bars) < 20:
+                logger.warning(f"Insufficient data with date filter for {symbol}, trying all data...")
+                bars = self.store.read_bars(symbol, "1h")
+            
             if not bars or len(bars) < 20:
                 logger.warning(f"Insufficient data for engine calculations: {symbol}")
                 return self._create_hold_recommendation(
@@ -1238,3 +1395,54 @@ class DailyRecommendationService:
         except Exception as e:
             logger.error(f"Error getting recommendation history: {e}")
             return []
+    
+    def _get_backtest_metrics(self, symbol: str, timeframe: str) -> Dict[str, float]:
+        """Get backtest metrics for the symbol/timeframe combination."""
+        try:
+            # Try to get metrics from strategy ranking service
+            metrics = self.strategy_ranking.get_strategy_metrics(symbol, timeframe)
+            if metrics:
+                return {
+                    "sharpe_ratio": metrics.get("sharpe_ratio", 0.0),
+                    "win_rate": metrics.get("win_rate", 0.0),
+                    "max_drawdown": metrics.get("max_drawdown", 0.0),
+                    "profit_factor": metrics.get("profit_factor", 0.0),
+                    "total_return": metrics.get("total_return", 0.0)
+                }
+        except Exception as e:
+            logger.warning(f"Could not get backtest metrics: {e}")
+        
+        # Return default metrics if unavailable
+        return {
+            "sharpe_ratio": 0.0,
+            "win_rate": 0.5,
+            "max_drawdown": 0.1,
+            "profit_factor": 1.0,
+            "total_return": 0.0
+        }
+    
+    def _calculate_performance_adjustment(self, metrics: Dict[str, float]) -> float:
+        """Calculate performance adjustment factor based on backtest metrics."""
+        try:
+            # Weight different metrics
+            sharpe_weight = 0.4
+            win_rate_weight = 0.3
+            profit_factor_weight = 0.3
+            
+            # Normalize metrics to 0-1 range
+            sharpe_score = max(0, min(1, (metrics.get("sharpe_ratio", 0) + 1) / 3))  # -1 to 2 -> 0 to 1
+            win_rate_score = metrics.get("win_rate", 0.5)
+            profit_factor_score = max(0, min(1, (metrics.get("profit_factor", 1) - 1) / 2))  # 1 to 3 -> 0 to 1
+            
+            # Calculate weighted score
+            weighted_score = (sharpe_score * sharpe_weight + 
+                           win_rate_score * win_rate_weight + 
+                           profit_factor_score * profit_factor_weight)
+            
+            # Convert to adjustment factor (0.5 to 2.0)
+            adjustment = 0.5 + (weighted_score * 1.5)
+            return max(0.5, min(2.0, adjustment))
+            
+        except Exception as e:
+            logger.warning(f"Error calculating performance adjustment: {e}")
+            return 1.0

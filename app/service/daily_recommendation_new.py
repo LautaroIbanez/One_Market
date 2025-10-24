@@ -431,7 +431,7 @@ class DailyRecommendationService:
         return long_count > 0 and short_count > 0 and abs(long_count - short_count) <= 1
     
     def _generate_trade_plan(self, symbol: str, date: str, direction: int, mtf_signals: Dict[str, Dict]) -> Optional[Dict[str, Any]]:
-        """Generate trade plan from signals."""
+        """Generate trade plan from signals using volatility-based levels."""
         if direction == 0:
             return None
         
@@ -447,7 +447,7 @@ class DailyRecommendationService:
             signal_data = latest_signals[best_strategy]
             strength = signal_data['strength']
             
-            # Load current price
+            # Load current price and historical data for volatility calculation
             target_date = datetime.fromisoformat(date)
             bars = self.store.read_bars(symbol, "1h", since=target_date - timedelta(hours=1), until=target_date)
             
@@ -456,27 +456,27 @@ class DailyRecommendationService:
             
             current_price = bars[-1].close
             
-            # Calculate position size
+            # Calculate volatility-based levels
+            volatility_levels = self._calculate_volatility_based_levels(
+                symbol, latest_tf, current_price, direction, bars
+            )
+            
+            # Calculate position size based on risk
             risk_amount = self.capital * self.max_risk_pct
             quantity = risk_amount / current_price
             
-            # Calculate stop loss and take profit
-            if direction > 0:  # Long
-                stop_loss = current_price * 0.95  # 5% stop loss
-                take_profit = current_price * 1.10  # 10% take profit
-            else:  # Short
-                stop_loss = current_price * 1.05  # 5% stop loss
-                take_profit = current_price * 0.90  # 10% take profit
-            
             return {
                 "timeframe": latest_tf,
-                "entry_band": current_price,
-                "stop_loss": stop_loss,
-                "take_profit": take_profit,
+                "entry_band": volatility_levels["entry_band"],
+                "stop_loss": volatility_levels["stop_loss"],
+                "take_profit": volatility_levels["take_profit"],
                 "quantity": quantity,
                 "risk_amount": risk_amount,
                 "risk_percentage": self.max_risk_pct,
-                "rationale": f"Based on {best_strategy} with strength {strength:.2f}",
+                "atr": volatility_levels["atr"],
+                "volatility_multiplier": volatility_levels["volatility_multiplier"],
+                "risk_reward_ratio": volatility_levels["risk_reward_ratio"],
+                "rationale": f"Based on {best_strategy} with strength {strength:.2f}. {volatility_levels['rationale']}",
                 "dataset_hash": self._compute_dataset_hash(symbol, date, list(mtf_signals.keys())),
                 "params_hash": self._compute_params_hash()
             }
@@ -485,6 +485,190 @@ class DailyRecommendationService:
             logger.error(f"Error generating trade plan: {e}")
             return None
     
+    def _calculate_volatility_based_levels(self, symbol: str, timeframe: str, current_price: float, direction: int, bars: List) -> Dict[str, Any]:
+        """Calculate entry band, stop loss, and take profit based on volatility (ATR) and backtest metrics."""
+        try:
+            # Convert bars to DataFrame for analysis
+            if hasattr(bars[0], 'to_dict'):
+                # Bars are objects with to_dict method
+                df = pd.DataFrame([bar.to_dict() for bar in bars])
+            else:
+                # Bars are already dictionaries
+                df = pd.DataFrame(bars)
+            df = df.sort_values('timestamp').reset_index(drop=True)
+            
+            if len(df) < 20:
+                logger.warning(f"Insufficient data for volatility calculation: {symbol} {timeframe}")
+                return self._get_default_levels(current_price, direction)
+            
+            # Calculate ATR (Average True Range) for volatility
+            high = df['high'].values
+            low = df['low'].values
+            close = df['close'].values
+            
+            # True Range calculation
+            tr1 = high[1:] - low[1:]
+            tr2 = np.abs(high[1:] - close[:-1])
+            tr3 = np.abs(low[1:] - close[:-1])
+            
+            true_range = np.maximum(tr1, np.maximum(tr2, tr3))
+            
+            # ATR calculation (14-period average)
+            atr_period = min(14, len(true_range))
+            atr = np.mean(true_range[-atr_period:]) if atr_period > 0 else 0
+            
+            # Get backtest metrics for the symbol/timeframe
+            backtest_metrics = self._get_backtest_metrics(symbol, timeframe)
+            
+            # Calculate volatility-based multipliers with backtest integration
+            base_volatility_multiplier = min(3.0, max(1.0, atr / current_price * 100))
+            
+            # Adjust multiplier based on backtest performance
+            performance_adjustment = self._calculate_performance_adjustment(backtest_metrics)
+            volatility_multiplier = base_volatility_multiplier * performance_adjustment
+            
+            # Entry band (based on ATR)
+            entry_band_pct = 0.5 * volatility_multiplier  # 0.5% to 1.5% based on volatility
+            entry_band_low = current_price * (1 - entry_band_pct / 100)
+            entry_band_high = current_price * (1 + entry_band_pct / 100)
+            
+            # Stop loss and take profit (based on ATR with backtest metrics)
+            if direction > 0:  # Long position
+                sl_multiplier = 2.0 * volatility_multiplier  # 2-6x ATR
+                stop_loss = current_price * (1 - (atr * sl_multiplier) / current_price)
+                tp_multiplier = 3.0 * volatility_multiplier  # 3-9x ATR
+                take_profit = current_price * (1 + (atr * tp_multiplier) / current_price)
+            elif direction < 0:  # Short position
+                sl_multiplier = 2.0 * volatility_multiplier
+                stop_loss = current_price * (1 + (atr * sl_multiplier) / current_price)
+                tp_multiplier = 3.0 * volatility_multiplier
+                take_profit = current_price * (1 - (atr * tp_multiplier) / current_price)
+            else:  # Hold
+                stop_loss = None
+                take_profit = None
+            
+            # Calculate risk-reward ratio
+            risk_reward_ratio = 0
+            if stop_loss and take_profit:
+                risk = abs(current_price - stop_loss)
+                reward = abs(take_profit - current_price)
+                risk_reward_ratio = reward / risk if risk > 0 else 0
+            
+            # Validate minimum R/R ratio (1.5:1 minimum)
+            min_rr_ratio = 1.5
+            if risk_reward_ratio < min_rr_ratio and stop_loss and take_profit:
+                # Adjust take profit to meet minimum R/R
+                risk = abs(current_price - stop_loss)
+                reward = risk * min_rr_ratio
+                if direction > 0:
+                    take_profit = current_price + reward
+                else:
+                    take_profit = current_price - reward
+                risk_reward_ratio = min_rr_ratio
+            
+            return {
+                "entry_band": [entry_band_low, entry_band_high],
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "atr": atr,
+                "volatility_multiplier": volatility_multiplier,
+                "entry_band_pct": entry_band_pct,
+                "sl_multiplier": sl_multiplier if direction != 0 else 0,
+                "tp_multiplier": tp_multiplier if direction != 0 else 0,
+                "risk_reward_ratio": risk_reward_ratio,
+                "backtest_metrics": backtest_metrics,
+                "rationale": f"ATR-based levels: ATR={atr:.2f}, Vol={volatility_multiplier:.1f}x, R/R={risk_reward_ratio:.1f}"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error calculating volatility-based levels: {e}")
+            return self._get_default_levels(current_price, direction)
+    
+    def _get_backtest_metrics(self, symbol: str, timeframe: str) -> Dict[str, float]:
+        """Get backtest metrics for the symbol/timeframe combination."""
+        try:
+            # Try to get metrics from strategy ranking service
+            metrics = self.strategy_ranking.get_strategy_metrics(symbol, timeframe)
+            if metrics:
+                return {
+                    "sharpe_ratio": metrics.get("sharpe_ratio", 0.0),
+                    "win_rate": metrics.get("win_rate", 0.0),
+                    "max_drawdown": metrics.get("max_drawdown", 0.0),
+                    "profit_factor": metrics.get("profit_factor", 0.0),
+                    "total_return": metrics.get("total_return", 0.0)
+                }
+        except Exception as e:
+            logger.warning(f"Could not get backtest metrics: {e}")
+        
+        # Return default metrics if unavailable
+        return {
+            "sharpe_ratio": 0.0,
+            "win_rate": 0.5,
+            "max_drawdown": 0.1,
+            "profit_factor": 1.0,
+            "total_return": 0.0
+        }
+    
+    def _calculate_performance_adjustment(self, metrics: Dict[str, float]) -> float:
+        """Calculate performance adjustment factor based on backtest metrics."""
+        try:
+            # Base adjustment
+            adjustment = 1.0
+            
+            # Adjust based on Sharpe ratio (higher Sharpe = tighter stops)
+            sharpe = metrics.get("sharpe_ratio", 0.0)
+            if sharpe > 1.5:
+                adjustment *= 0.8  # Tighter stops for high Sharpe
+            elif sharpe < 0.5:
+                adjustment *= 1.2  # Wider stops for low Sharpe
+            
+            # Adjust based on win rate
+            win_rate = metrics.get("win_rate", 0.5)
+            if win_rate > 0.6:
+                adjustment *= 0.9  # Slightly tighter for high win rate
+            elif win_rate < 0.4:
+                adjustment *= 1.1  # Wider for low win rate
+            
+            # Adjust based on max drawdown
+            max_dd = metrics.get("max_drawdown", 0.1)
+            if max_dd > 0.2:
+                adjustment *= 1.3  # Much wider stops for high drawdown
+            elif max_dd < 0.05:
+                adjustment *= 0.7  # Tighter stops for low drawdown
+            
+            # Keep adjustment within reasonable bounds
+            return max(0.5, min(2.0, adjustment))
+            
+        except Exception as e:
+            logger.warning(f"Error calculating performance adjustment: {e}")
+            return 1.0
+    
+    def _get_default_levels(self, current_price: float, direction: int) -> Dict[str, Any]:
+        """Get default levels when volatility calculation fails."""
+        if direction > 0:  # Long
+            stop_loss = current_price * 0.95  # 5% stop loss
+            take_profit = current_price * 1.10  # 10% take profit
+        elif direction < 0:  # Short
+            stop_loss = current_price * 1.05  # 5% stop loss
+            take_profit = current_price * 0.90  # 10% take profit
+        else:  # Hold
+            stop_loss = None
+            take_profit = None
+        
+        return {
+            "entry_band": [current_price * 0.995, current_price * 1.005],
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "atr": 0.0,
+            "volatility_multiplier": 1.0,
+            "entry_band_pct": 0.5,
+            "sl_multiplier": 0,
+            "tp_multiplier": 0,
+            "risk_reward_ratio": 2.0,
+            "backtest_metrics": {},
+            "rationale": "Default levels (volatility calculation failed)"
+        }
+
     def _compute_dataset_hash(self, symbol: str, date: str, timeframes: List[str]) -> str:
         """Compute dataset hash for reproducibility."""
         data_str = f"{symbol}_{date}_{'_'.join(timeframes)}"

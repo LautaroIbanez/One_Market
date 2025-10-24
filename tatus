@@ -1,0 +1,45 @@
+warning: in the working copy of 'main.py', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/main.py b/main.py[m
+[1mindex c2bd3a4..2bba5df 100644[m
+[1m--- a/main.py[m
+[1m+++ b/main.py[m
+[36m@@ -878,8 +878,23 @@[m [masync def startup_event():[m
+     [m
+     # Start scheduler if enabled[m
+     if settings.SCHEDULER_ENABLED:[m
+[31m-        from app.jobs import start_scheduler[m
+[31m-        start_scheduler()[m
+[32m+[m[32m        try:[m
+[32m+[m[32m            from app.jobs.scheduler import start_scheduler[m
+[32m+[m[32m            import asyncio[m
+[32m+[m[32m            # Run the async function in the event loop[m
+[32m+[m[32m            loop = asyncio.get_event_loop()[m
+[32m+[m[32m            loop.create_task(start_scheduler())[m
+[32m+[m[32m            print("✅ Daily automation enabled:")[m
+[32m+[m[32m            print("   - Data updates every 5 minutes")[m
+[32m+[m[32m            print("   - Window A evaluation (12:00-15:00 UTC)")[m
+[32m+[m[32m            print("   - Position monitoring every minute")[m
+[32m+[m[32m            print("   - Forced close at 19:00 UTC")[m
+[32m+[m[32m            print("   - Nightly backtest at 02:00 UTC")[m
+[32m+[m[32m        except Exception as e:[m
+[32m+[m[32m            print(f"⚠️  Error starting scheduler: {e}")[m
+[32m+[m[32m            print("   Daily automation disabled due to error")[m
+[32m+[m[32m    else:[m
+[32m+[m[32m        print("⚠️  Daily automation disabled - manual execution required")[m
+ [m
+ [m
+ @app.on_event("shutdown")[m
+[36m@@ -889,8 +904,11 @@[m [masync def shutdown_event():[m
+     print("\nONE MARKET API - Shutting down")[m
+     [m
+     if settings.SCHEDULER_ENABLED:[m
+[31m-        from app.jobs import stop_scheduler[m
+[31m-        stop_scheduler()[m
+[32m+[m[32m        from app.jobs.scheduler import stop_scheduler[m
+[32m+[m[32m        import asyncio[m
+[32m+[m[32m        # Run the async function in the event loop[m
+[32m+[m[32m        loop = asyncio.get_event_loop()[m
+[32m+[m[32m        loop.create_task(stop_scheduler())[m
+ [m
+ [m
+ if __name__ == "__main__":[m

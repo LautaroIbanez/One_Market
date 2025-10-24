@@ -109,7 +109,9 @@ def get_complete_recommendation(symbol: str, capital: float, risk_pct: float):
             timeout=30
         )
         if response.status_code == 200:
-            return response.json()
+            data = response.json()
+            # Extract recommendation data from nested structure
+            return data.get("recommendation", {})
         else:
             return None
     except Exception as e:

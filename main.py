@@ -878,8 +878,23 @@ async def startup_event():
     
     # Start scheduler if enabled
     if settings.SCHEDULER_ENABLED:
-        from app.jobs import start_scheduler
-        start_scheduler()
+        try:
+            from app.jobs.scheduler import start_scheduler
+            import asyncio
+            # Run the async function in the event loop
+            loop = asyncio.get_event_loop()
+            loop.create_task(start_scheduler())
+            print("✅ Daily automation enabled:")
+            print("   - Data updates every 5 minutes")
+            print("   - Window A evaluation (12:00-15:00 UTC)")
+            print("   - Position monitoring every minute")
+            print("   - Forced close at 19:00 UTC")
+            print("   - Nightly backtest at 02:00 UTC")
+        except Exception as e:
+            print(f"⚠️  Error starting scheduler: {e}")
+            print("   Daily automation disabled due to error")
+    else:
+        print("⚠️  Daily automation disabled - manual execution required")
 
 
 @app.on_event("shutdown")
@@ -889,8 +904,11 @@ async def shutdown_event():
     print("\nONE MARKET API - Shutting down")
     
     if settings.SCHEDULER_ENABLED:
-        from app.jobs import stop_scheduler
-        stop_scheduler()
+        from app.jobs.scheduler import stop_scheduler
+        import asyncio
+        # Run the async function in the event loop
+        loop = asyncio.get_event_loop()
+        loop.create_task(stop_scheduler())
 
 
 if __name__ == "__main__":

@@ -48,15 +48,26 @@ if st.button("Obtener Recomendación"):
             data = response.json()
             st.success("✅ Recomendación obtenida")
             
+            # Access recommendation data from the correct nested structure
+            recommendation = data.get("recommendation", {})
+            
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Dirección", data.get("direction", "N/A"))
+                st.metric("Dirección", recommendation.get("direction", "N/A"))
             with col2:
-                st.metric("Confianza", f"{data.get('confidence', 0)}%")
+                st.metric("Confianza", f"{recommendation.get('confidence', 0)}%")
             with col3:
-                st.metric("Precio Entrada", data.get("entry_price", "N/A"))
+                st.metric("Precio Entrada", recommendation.get("entry_price", "N/A"))
             
-            st.write("**Razonamiento:**", data.get("rationale", "N/A"))
+            st.write("**Razonamiento:**", recommendation.get("rationale", "N/A"))
+            
+            # Show additional fields if available
+            if recommendation.get("stop_loss"):
+                st.metric("Stop Loss", f"${recommendation.get('stop_loss', 0):.2f}")
+            if recommendation.get("take_profit"):
+                st.metric("Take Profit", f"${recommendation.get('take_profit', 0):.2f}")
+            if recommendation.get("strategy_name"):
+                st.metric("Estrategia", recommendation.get("strategy_name"))
         else:
             st.error(f"❌ Error en recomendación: {response.status_code}")
     except Exception as e:

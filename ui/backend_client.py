@@ -181,7 +181,19 @@ class BackendClient:
             )
             
             if response.status_code == 200:
-                return response.json()
+                data = response.json()
+                # Extract recommendation data from nested structure
+                recommendation = data.get("recommendation", {})
+                metadata = data.get("metadata", {})
+                data_freshness = data.get("data_freshness", {})
+                
+                # Return the recommendation data with metadata
+                return {
+                    "recommendation": recommendation,
+                    "metadata": metadata,
+                    "data_freshness": data_freshness,
+                    "raw_response": data
+                }
             else:
                 logger.error(f"Recommendation failed: {response.status_code} - {response.text}")
                 st.error(f"Recommendation error: {response.status_code} - {response.text}")
