@@ -69,9 +69,19 @@ def calculate_signals_and_weights(df: pd.DataFrame, symbol: str, timeframe: str)
         )
         
         if recommendation:
-            # Extract signal information from recommendation
-            signal_value = recommendation.get('signal', 0)
-            confidence = recommendation.get('confidence', 0)
+            # Extract signal information from nested recommendation structure
+            recommendation_data = recommendation.get('recommendation', {})
+            
+            # Convert direction to signal value
+            direction = recommendation_data.get('direction', 'HOLD')
+            if direction == 'LONG':
+                signal_value = 1
+            elif direction == 'SHORT':
+                signal_value = -1
+            else:  # HOLD or unknown
+                signal_value = 0
+            
+            confidence = recommendation_data.get('confidence', 0)
             
             # Create mock combined signal object
             class MockSignal:
